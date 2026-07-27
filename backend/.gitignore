@@ -1,0 +1,7 @@
+# AI Phone Receptionist
+__pycache__/
+*.pyc
+.env
+*.log
+tests/__pycache__/
+*.sqlite3
