@@ -1,0 +1,12 @@
+/* Shared typography for the Vaani pages.
+ *
+ * Instrument Sans + Instrument Serif are open source (SIL OFL), so they are
+ * safe to ship commercially. They are pulled from Google Fonts here; the CSP
+ * in api/core/middleware.py allowlists fonts.googleapis.com and
+ * fonts.gstatic.com for exactly this.
+ *
+ * To self-host instead (no external request, tighter CSP): drop the .woff2
+ * files in frontend/lib/fonts/, replace the @import with @font-face rules
+ * pointing at them, and remove the two font hosts from the CSP.
+ */
+@import url('https://fonts.googleapis.com/css2?family=Instrument+Sans:ital,wght@0,400;0,500;0,600;1,400&family=Instrument+Serif:ital@0;1&display=swap');

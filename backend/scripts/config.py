@@ -39,7 +39,28 @@ class Settings(BaseModel):
     
     # ElevenLabs Configuration
     ELEVENLABS_API_KEY: str = Field(default_factory=lambda: _env("ELEVENLABS_API_KEY"))
-    ELEVENLABS_VOICE_ID: str = Field(default_factory=lambda: _env("ELEVENLABS_VOICE_ID"))
+    ELEVENLABS_VOICE_ID: str = Field(default_factory=lambda: _env("ELEVENLABS_VOICE_ID", "21m00Tcm4TlvDq8ikWAM"))
+    ELEVENLABS_MODEL: str = Field(default_factory=lambda: _env("ELEVENLABS_MODEL", "eleven_flash_v2_5"))
+
+    # Speech engine selection. "auto" picks the best configured provider and
+    # degrades to the browser's built-in speech when nothing is installed,
+    # so a demo works with zero keys and zero downloads.
+    #   TTS: auto | elevenlabs | piper | none
+    #   STT: auto | deepgram | faster_whisper | none
+    TTS_PROVIDER: str = Field(default_factory=lambda: _env("TTS_PROVIDER", "auto").lower())
+    STT_PROVIDER: str = Field(default_factory=lambda: _env("STT_PROVIDER", "auto").lower())
+
+    # Piper - free, offline, MIT-licensed neural TTS.
+    # PIPER_VOICE pins one extra .onnx path; any voice in backend/models/piper
+    # is picked up automatically. PIPER_DEFAULT_VOICE names which to use when
+    # a request does not ask for one (else the first English voice wins).
+    PIPER_VOICE: str = Field(default_factory=lambda: _env("PIPER_VOICE"))
+    PIPER_DEFAULT_VOICE: str = Field(default_factory=lambda: _env("PIPER_DEFAULT_VOICE"))
+
+    # faster-whisper - free, offline, MIT-licensed STT
+    WHISPER_MODEL_SIZE: str = Field(default_factory=lambda: _env("WHISPER_MODEL_SIZE", "base"))
+    WHISPER_DEVICE: str = Field(default_factory=lambda: _env("WHISPER_DEVICE", "cpu"))
+    WHISPER_COMPUTE_TYPE: str = Field(default_factory=lambda: _env("WHISPER_COMPUTE_TYPE", "int8"))
     
     # LLM Configuration (OpenAI)
     OPENAI_API_KEY: str = Field(default_factory=lambda: _env("OPENAI_API_KEY"))
@@ -64,8 +85,17 @@ class Settings(BaseModel):
     RATE_LIMIT_WINDOW_SECONDS: int = Field(default_factory=lambda: _env_int("RATE_LIMIT_WINDOW_SECONDS", 60))
     
     # CORS
+    # The API serves the frontend same-origin, so these only matter for split
+    # deploys and the standalone static server. 127.0.0.1 is a distinct origin
+    # from localhost to the browser, so both spellings must be listed.
     FRONTEND_URL: str = Field(default_factory=lambda: _env("FRONTEND_URL", "http://localhost:3000"))
-    CORS_ORIGINS: list = Field(default_factory=lambda: _env("CORS_ORIGINS", "http://localhost:3000,http://localhost:8080").split(","))
+    CORS_ORIGINS: list = Field(default_factory=lambda: [
+        o.strip() for o in _env(
+            "CORS_ORIGINS",
+            "http://localhost:3000,http://localhost:8080,http://localhost:8000,"
+            "http://127.0.0.1:3000,http://127.0.0.1:8080,http://127.0.0.1:8000",
+        ).split(",") if o.strip()
+    ])
 
 
 try:

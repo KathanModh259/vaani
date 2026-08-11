@@ -1,34 +1,41 @@
-version: "3.9"
-
 services:
   api:
     build:
       context: .
       dockerfile: Dockerfile
+      args:
+        # 1 = bake the free Piper/Whisper engines into the image (+~175MB).
+        # 0 = smaller image; mount piper_models below instead.
+        WITH_SPEECH: "${WITH_SPEECH:-0}"
     ports:
       - "8000:8000"
     env_file:
       - backend/.env
     environment:
-      - DATABASE_URL=postgresql+asyncpg://vaani:vaani@db:5432/vaani
+      ENVIRONMENT: production
+      DATABASE_URL: postgresql+asyncpg://vaani:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}@db:5432/vaani
+      # Must be set - the app refuses to boot in production without it.
+      JWT_SECRET_KEY: ${JWT_SECRET_KEY:?generate one - see DEPLOYMENT.md}
+      CORS_ORIGINS: ${CORS_ORIGINS:-https://example.com}
+    volumes:
+      # Persist downloaded voice models across rebuilds.
+      - piper_models:/app/backend/models/piper
+      # HuggingFace cache so faster-whisper does not re-download each start.
+      - hf_cache:/home/vaani/.cache/huggingface
     depends_on:
       db:
         condition: service_healthy
     restart: unless-stopped
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
 
   db:
     image: postgres:16-alpine
     environment:
       POSTGRES_USER: vaani
-      POSTGRES_PASSWORD: vaani
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
       POSTGRES_DB: vaani
+    # Bound to loopback so the database is not reachable from the internet.
     ports:
-      - "5432:5432"
+      - "127.0.0.1:5432:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
     healthcheck:
@@ -41,8 +48,10 @@ services:
   redis:
     image: redis:7-alpine
     ports:
-      - "6379:6379"
+      - "127.0.0.1:6379:6379"
     restart: unless-stopped
 
 volumes:
   postgres_data:
+  piper_models:
+  hf_cache:

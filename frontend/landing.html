@@ -1,0 +1,614 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Vaani — AI Receptionist that answers every call</title>
+<meta name="description" content="Vaani is an AI phone receptionist that answers, books and escalates calls 24x7 in Hindi and English — so your business never misses another customer." />
+<meta property="og:type" content="website" />
+<meta property="og:title" content="Vaani — AI Receptionist that answers every call" />
+<meta property="og:description" content="Answers, books and escalates calls 24x7 in Hindi and English. Never miss another customer." />
+<meta property="og:image" content="/assets/vaani-portrait.jpg" />
+<meta name="twitter:card" content="summary_large_image" />
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Cdefs%3E%3CradialGradient id='g' cx='30%25' cy='30%25'%3E%3Cstop offset='0%25' stop-color='%23d7d0ff'/%3E%3Cstop offset='100%25' stop-color='%236b58c8'/%3E%3C/radialGradient%3E%3C/defs%3E%3Ccircle cx='16' cy='16' r='14' fill='url(%23g)'/%3E%3Ctext x='16' y='22' text-anchor='middle' font-size='16' font-family='sans-serif' font-weight='bold' fill='%230b0819'%3EV%3C/text%3E%3C/svg%3E" />
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Instrument+Sans:ital,wght@0,400;0,500;0,600;1,400&family=Instrument+Serif:ital@0;1&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --ink:#000; --paper:#fff; --smoke:#f2f2f4;
+    --line:rgba(0,0,0,.10); --line-dk:rgba(255,255,255,.14);
+    --mute:rgba(0,0,0,.52); --mute-dk:rgba(255,255,255,.54);
+    --violet:#b9a8ff;
+    --sans:"Instrument Sans", ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+    --serif:"Instrument Serif", Georgia, "Times New Roman", serif;
+    --pad: clamp(20px, 5vw, 80px);
+  }
+  *{box-sizing:border-box}
+  html{scroll-behavior:smooth}
+  body{
+    margin:0; background:var(--ink); color:var(--ink);
+    font-family:var(--sans); font-size:17px; line-height:1.5;
+    -webkit-font-smoothing:antialiased; overflow-x:hidden;
+  }
+  a{color:inherit; text-decoration:none}
+  h1,h2,h3{margin:0; font-weight:400; letter-spacing:-.025em; line-height:.98}
+  h1{font-size:clamp(44px,8.4vw,104px)}
+  h2{font-size:clamp(34px,5.6vw,72px); line-height:1.02}
+  h3{font-size:clamp(21px,2.3vw,29px); line-height:1.16; letter-spacing:-.015em}
+  em{font-family:var(--serif); font-style:italic; letter-spacing:-.01em}
+  .eyebrow{font-size:11px; letter-spacing:.22em; text-transform:uppercase; color:var(--mute); margin:0 0 26px; font-weight:500}
+  .lede{font-size:clamp(16px,1.35vw,19px); line-height:1.55; color:var(--mute); max-width:52ch; margin:26px 0 0}
+  .wrap{max-width:1240px; margin:0 auto; width:100%}
+  .dark{background:var(--ink); color:var(--paper)}
+  .dark .eyebrow,.dark .lede{color:var(--mute-dk)}
+
+  /* ============ FIXED VISUAL STAGE ============
+     Pinned full-viewport canvas. Page content scrolls over it, exactly like
+     a pinned hero: the avatar never moves in the layout, only what is drawn
+     inside it changes with scroll. */
+  #stage{position:fixed; inset:0; z-index:0; background:radial-gradient(circle at 50% 44%, #0d0b18 0%, #050409 44%, #000 84%); transition:opacity .6s ease}
+  #heroCanvas{position:absolute; inset:0; width:100%; height:100%; opacity:0; transition:opacity 1.4s ease}
+  #heroCanvas.ready{opacity:1}
+  .vignette{position:absolute; inset:0; pointer-events:none;
+    background:radial-gradient(circle at 50% 46%, transparent 10%, rgba(0,0,0,.5) 60%, #000 88%),
+               linear-gradient(to right, #000 1%, transparent 34%, transparent 66%, #000 99%)}
+
+  /* ============ HERO SEQUENCE ============
+     Tall transparent runway that gives the scroll choreography room. The
+     caption layer is sticky so copy holds still while progress advances. */
+  #seq{position:relative; z-index:1; height:330vh}
+  .pin{position:sticky; top:0; height:100vh; display:grid; align-items:center; padding:0 var(--pad); overflow:hidden}
+  .cap{grid-area:1/1; max-width:1240px; margin:0 auto; width:100%; color:var(--paper); will-change:opacity,transform}
+  .cap .eyebrow{color:var(--mute-dk)}
+  .cap .lede{color:var(--mute-dk)}
+  .cap h1{max-width:15ch}
+  .cap2{text-align:center}
+  .cap2 h2{max-width:18ch; margin:0 auto; font-size:clamp(32px,5.2vw,68px)}
+  .hero-cta{display:flex; flex-wrap:wrap; gap:12px; margin-top:38px}
+  .scrollcue{position:absolute; left:50%; bottom:26px; transform:translateX(-50%); font-size:10px; letter-spacing:.24em; text-transform:uppercase; color:rgba(255,255,255,.4); display:flex; flex-direction:column; align-items:center; gap:8px}
+  .scrollcue i{display:block; width:1px; height:34px; background:linear-gradient(rgba(255,255,255,.5), transparent); animation:cue 2.2s ease-in-out infinite}
+  @keyframes cue{0%,100%{opacity:.25; transform:scaleY(.6)}50%{opacity:1; transform:scaleY(1)}}
+
+  /* ============ PAGE CONTENT (scrolls over the stage) ============ */
+  main{position:relative; z-index:2}
+  section{padding:clamp(80px,11vw,170px) var(--pad); position:relative}
+  .btn{display:inline-flex; align-items:center; gap:9px; cursor:pointer; font-family:inherit; font-size:14px; font-weight:500; padding:11px 22px; border-radius:999px; border:1px solid var(--line); background:transparent; color:inherit; transition:.22s ease; white-space:nowrap}
+  .btn:hover{transform:translateY(-1px)}
+  .btn-fill{background:var(--paper); color:var(--ink); border-color:var(--paper)}
+  .btn-fill:hover{box-shadow:0 10px 34px rgba(255,255,255,.2)}
+  .btn-ink{background:var(--ink); color:var(--paper); border-color:var(--ink)}
+  .btn-ghost-dk{border-color:var(--line-dk); color:var(--paper)}
+  .btn-ghost-dk:hover{border-color:rgba(255,255,255,.5)}
+  .btn[disabled]{opacity:.5; cursor:default; transform:none}
+
+  nav{position:fixed; inset:0 0 auto 0; z-index:60; display:flex; align-items:center; justify-content:space-between; padding:16px var(--pad); color:var(--paper); border-bottom:1px solid transparent; transition:background .35s, border-color .35s}
+  nav.solid{background:rgba(0,0,0,.72); backdrop-filter:blur(16px); border-bottom-color:var(--line-dk)}
+  .mark{font-size:15px; letter-spacing:.26em; text-transform:uppercase; font-weight:500}
+  .navlinks{display:flex; align-items:center; gap:30px; font-size:14px}
+  .navlinks a{opacity:.66; transition:opacity .2s}
+  .navlinks a:hover{opacity:1}
+  @media(max-width:820px){ .navlinks .hide-sm{display:none} }
+
+  .rv{opacity:0; transform:translateY(26px); transition:opacity .9s cubic-bezier(.2,.7,.3,1), transform .9s cubic-bezier(.2,.7,.3,1)}
+  .rv.in{opacity:1; transform:none}
+  @media(prefers-reduced-motion:reduce){ .rv{opacity:1; transform:none; transition:none} html{scroll-behavior:auto} }
+
+  .strip{border-top:1px solid var(--line-dk); border-bottom:1px solid var(--line-dk); padding:22px 0; overflow:hidden; background:var(--ink)}
+  .strip-track{display:flex; gap:64px; width:max-content; animation:slide 34s linear infinite; white-space:nowrap}
+  .strip-track span{font-size:13px; letter-spacing:.18em; text-transform:uppercase; color:rgba(255,255,255,.42)}
+  @keyframes slide{to{transform:translateX(-50%)}}
+
+  .split{display:grid; grid-template-columns:1fr 1fr; gap:clamp(32px,6vw,110px); align-items:center}
+  @media(max-width:900px){ .split{grid-template-columns:1fr} }
+  .stat{font-size:clamp(52px,7vw,92px); font-family:var(--serif); line-height:1; letter-spacing:-.03em}
+
+  .grid3{display:grid; grid-template-columns:repeat(3,1fr); gap:1px; background:var(--line-dk); border:1px solid var(--line-dk)}
+  @media(max-width:900px){ .grid3{grid-template-columns:1fr} }
+  .cell{background:var(--ink); padding:clamp(28px,3.4vw,46px)}
+  .cell .n{font-size:11px; letter-spacing:.2em; color:var(--mute-dk); margin-bottom:24px; text-transform:uppercase}
+  .cell p{color:var(--mute-dk); font-size:15.5px; line-height:1.55; margin:14px 0 0}
+  .soon{display:inline-block; margin-left:8px; font-size:9.5px; letter-spacing:.14em; text-transform:uppercase; padding:3px 9px; border-radius:999px; border:1px solid rgba(185,168,255,.4); color:var(--violet); vertical-align:middle}
+
+  .demo{border:1px solid var(--line-dk); border-radius:18px; background:#0e0e11; padding:clamp(20px,2.6vw,34px); min-height:330px}
+  .demo-head{display:flex; align-items:center; gap:10px; padding-bottom:18px; margin-bottom:20px; border-bottom:1px solid var(--line-dk); font-size:11px; letter-spacing:.2em; text-transform:uppercase; color:var(--mute-dk)}
+  .live{width:7px; height:7px; border-radius:50%; background:#7ee2a8; box-shadow:0 0 12px #7ee2a8; animation:blink 1.4s ease-in-out infinite}
+  @keyframes blink{50%{opacity:.35}}
+  .turn{margin-bottom:16px; opacity:0; transform:translateY(8px); transition:.5s ease}
+  .turn.in{opacity:1; transform:none}
+  .who{font-size:10px; letter-spacing:.2em; text-transform:uppercase; color:rgba(255,255,255,.36); margin-bottom:5px}
+  .said{line-height:1.5; color:var(--paper)}
+  .turn.ai .said{color:var(--violet)}
+  .chip{display:inline-block; margin-top:6px; font-size:11px; padding:4px 11px; border-radius:999px; border:1px solid rgba(126,226,168,.34); color:#7ee2a8}
+
+  /* voice sampler */
+  .voicebox{display:flex; flex-wrap:wrap; gap:12px; margin-top:34px; align-items:center}
+  .bars{display:flex; align-items:flex-end; gap:3px; height:26px; opacity:0; transition:opacity .3s}
+  .bars.on{opacity:1}
+  .bars i{width:3px; background:var(--violet); border-radius:2px; height:20%; animation:eq .9s ease-in-out infinite}
+  .bars i:nth-child(2){animation-delay:.12s} .bars i:nth-child(3){animation-delay:.24s}
+  .bars i:nth-child(4){animation-delay:.36s} .bars i:nth-child(5){animation-delay:.48s}
+  @keyframes eq{0%,100%{height:18%}50%{height:100%}}
+  .vnote{font-size:12.5px; color:var(--mute-dk)}
+
+  .plans{display:grid; grid-template-columns:repeat(3,1fr); gap:18px; margin-top:60px}
+  @media(max-width:980px){ .plans{grid-template-columns:1fr} }
+  .plan{border:1px solid var(--line-dk); border-radius:20px; padding:clamp(26px,2.8vw,38px); display:flex; flex-direction:column; background:#0d0d10; transition:.3s ease; position:relative}
+  .plan:hover{border-color:rgba(255,255,255,.34); transform:translateY(-4px)}
+  .plan.feature{background:linear-gradient(#15121f,#0d0d10); border-color:rgba(185,168,255,.42)}
+  .tag{position:absolute; top:-11px; left:50%; transform:translateX(-50%); background:var(--violet); color:#0b0819; font-size:10px; font-weight:600; letter-spacing:.14em; text-transform:uppercase; padding:5px 13px; border-radius:999px}
+  .plan .desc{color:var(--mute-dk); font-size:14px; min-height:42px; margin:6px 0 22px}
+  .price{font-size:clamp(38px,4.4vw,56px); font-family:var(--serif); letter-spacing:-.03em; line-height:1; color:var(--paper)}
+  .per{font-size:14px; color:var(--mute-dk); font-family:var(--sans)}
+  .feats{list-style:none; padding:0; margin:28px 0 30px; display:flex; flex-direction:column; gap:12px; flex:1}
+  .feats li{font-size:14.5px; color:rgba(255,255,255,.78); display:flex; gap:11px; line-height:1.45}
+  .feats li::before{content:"—"; color:var(--violet); flex-shrink:0}
+  .plan .btn{width:100%; justify-content:center}
+
+  .quote{font-family:var(--serif); font-size:clamp(24px,3.4vw,46px); line-height:1.24; letter-spacing:-.02em; max-width:20ch; color:var(--paper)}
+  footer{background:var(--ink); color:var(--paper); padding:70px var(--pad) 40px; border-top:1px solid var(--line-dk); position:relative; z-index:2}
+  .foot{display:flex; justify-content:space-between; gap:30px; flex-wrap:wrap; max-width:1240px; margin:0 auto; font-size:13px; color:var(--mute-dk)}
+  .foot a:hover{color:var(--paper)}
+
+  .modal-bg{position:fixed; inset:0; z-index:100; background:rgba(0,0,0,.78); backdrop-filter:blur(8px); display:none; align-items:center; justify-content:center; padding:20px}
+  .modal-bg.open{display:flex}
+  .modal{background:#111114; border:1px solid var(--line-dk); border-radius:20px; padding:34px; width:min(430px,100%); color:var(--paper); position:relative}
+  .modal .sub{color:var(--mute-dk); font-size:14px; margin:8px 0 26px}
+  .tabs{display:flex; gap:4px; background:rgba(255,255,255,.06); padding:4px; border-radius:999px; margin-bottom:26px}
+  .tabs button{flex:1; background:transparent; border:0; color:var(--mute-dk); font-family:inherit; font-size:13.5px; padding:9px; border-radius:999px; cursor:pointer; transition:.2s}
+  .tabs button.on{background:var(--paper); color:var(--ink); font-weight:500}
+  .fld{margin-bottom:14px; display:flex; flex-direction:column; gap:7px}
+  .fld label{font-size:10.5px; letter-spacing:.16em; text-transform:uppercase; color:var(--mute-dk)}
+  .fld input{background:#08080a; border:1px solid var(--line-dk); border-radius:10px; padding:12px 14px; color:var(--paper); font-family:inherit; font-size:14.5px; outline:none; transition:.2s}
+  .fld input:focus{border-color:rgba(185,168,255,.6)}
+  .msg{font-size:13px; border-radius:10px; padding:11px 14px; margin-bottom:16px; display:none; line-height:1.45}
+  .msg.show{display:block}
+  .msg.err{background:rgba(239,68,68,.12); color:#fca5a5; border:1px solid rgba(239,68,68,.3)}
+  .msg.ok{background:rgba(126,226,168,.12); color:#7ee2a8; border:1px solid rgba(126,226,168,.3)}
+  .modal .btn{width:100%; justify-content:center; margin-top:8px}
+  .x{position:absolute; top:16px; right:18px; background:none; border:0; color:var(--mute-dk); font-size:22px; cursor:pointer; line-height:1}
+</style>
+</head>
+<body>
+
+<nav id="nav">
+  <a href="#seq" class="mark">Vaani</a>
+  <div class="navlinks">
+    <a href="#how" class="hide-sm">Product</a>
+    <a href="#pricing" class="hide-sm">Pricing</a>
+    <a href="#trust" class="hide-sm">Security</a>
+    <a href="/app" class="hide-sm">Live demo</a>
+    <a href="#" id="navAuth">Sign in</a>
+    <a href="#pricing" class="btn btn-fill">Start free trial</a>
+  </div>
+</nav>
+
+<!-- pinned visual layer -->
+<div id="stage">
+  <canvas id="heroCanvas"></canvas>
+  <div class="vignette"></div>
+</div>
+
+<!-- scroll runway that drives the choreography -->
+<div id="seq">
+  <div class="pin">
+    <div class="cap cap1" id="cap1">
+      <p class="eyebrow">AI Voice Receptionist</p>
+      <h1>Your front desk,<br><em>never</em> off duty.</h1>
+      <p class="lede">Vaani answers every call in your business's voice — books appointments, replies to questions, and escalates what matters. 24 hours a day, in Hindi and English.</p>
+      <div class="hero-cta">
+        <a href="/app" class="btn btn-fill">Talk to Vaani &nbsp;→</a>
+        <a href="#pricing" class="btn btn-ghost-dk">See pricing</a>
+      </div>
+    </div>
+    <div class="cap cap2" id="cap2" style="opacity:0">
+      <p class="eyebrow">She picks up on the first ring</p>
+      <h2>Every call answered.<br><em>Every single time.</em></h2>
+    </div>
+    <div class="scrollcue" id="cue"><i></i>Scroll</div>
+  </div>
+</div>
+
+<main>
+  <div class="strip"><div class="strip-track" id="strip"></div></div>
+
+  <section class="dark">
+    <div class="wrap split">
+      <div class="rv">
+        <p class="eyebrow">Always on</p>
+        <h2>The calls you miss are the ones that <em>cost the most.</em></h2>
+      </div>
+      <div class="rv">
+        <div class="stat" style="color:var(--paper)">24/7</div>
+        <p class="lede">Vaani answers at 2am, through lunch, and when every line is already busy. Your caller gets a real conversation instead of a voicemail beep.</p>
+        <p class="lede" style="margin-top:20px">You get the transcript, the summary and the booking — waiting for you in the morning.</p>
+      </div>
+    </div>
+  </section>
+
+  <section id="how" class="dark">
+    <div class="wrap">
+      <div class="rv" style="margin-bottom:70px">
+        <p class="eyebrow">What she does</p>
+        <h2>Answers. Books.<br><em>Escalates.</em></h2>
+      </div>
+      <div class="grid3 rv">
+        <div class="cell"><div class="n">01</div><h3>Answers like your best staff</h3>
+          <p>Trained on your services, hours, pricing and FAQs. She handles the questions your team repeats forty times a day — accurately, and without a script that sounds like one.</p></div>
+        <div class="cell"><div class="n">02</div><h3>Books into your calendar</h3>
+          <p>Checks real availability, confirms the slot on the call, and sends the SMS confirmation before the caller hangs up. No callbacks, no double bookings.</p></div>
+        <div class="cell"><div class="n">03</div><h3>Knows when to get a human</h3>
+          <p>Angry customer, high-value enquiry, or anything outside her remit — she transfers live to your team with the full context already gathered.</p></div>
+      </div>
+    </div>
+  </section>
+
+  <section class="dark">
+    <div class="wrap split">
+      <div class="rv">
+        <p class="eyebrow">A real call</p>
+        <h2>Listen to how she <em>handles it.</em></h2>
+        <p class="lede">No menu trees. No "press 1 for reception". Vaani understands what the caller actually wants and finishes the job on the call.</p>
+        <div class="voicebox">
+          <button class="btn btn-ghost-dk" id="playEn">▶ Hear her voice</button>
+          <button class="btn btn-ghost-dk" id="playHi">▶ हिन्दी में सुनिए</button>
+          <div class="bars" id="bars"><i></i><i></i><i></i><i></i><i></i></div>
+        </div>
+        <p class="vnote" id="vnote"></p>
+      </div>
+      <div class="demo rv" id="demo">
+        <div class="demo-head"><span class="live"></span> Incoming call · 2:14 PM</div>
+        <div id="demoTurns"></div>
+      </div>
+    </div>
+  </section>
+
+  <section class="dark">
+    <div class="wrap split">
+      <div class="rv">
+        <p class="eyebrow">Multilingual</p>
+        <h2>She switches languages <em>mid-sentence.</em></h2>
+        <p class="lede">Your callers don't code-switch politely — they mix Hindi and English in the same breath. Vaani follows them without missing a beat, and replies in whichever language the caller is most comfortable in.</p>
+      </div>
+      <div class="rv">
+        <div class="grid3" style="grid-template-columns:1fr">
+          <div class="cell"><h3>हिन्दी</h3><p>Full conversational Hindi, including Hinglish mixing.</p></div>
+          <div class="cell"><h3>English</h3><p>Indian and international accents, handled natively.</p></div>
+          <div class="cell"><h3>ગુજરાતી <span class="soon">Coming soon</span></h3><p>Gujarati understanding is live; the matching voice ships next.</p></div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section id="trust" class="dark">
+    <div class="wrap">
+      <div class="rv" style="margin-bottom:70px">
+        <p class="eyebrow">Built for businesses that are accountable</p>
+        <h2>Your calls. Your data.<br><em>Your control.</em></h2>
+      </div>
+      <div class="grid3 rv">
+        <div class="cell"><div class="n">Privacy</div><h3>Encrypted end to end</h3>
+          <p>Call audio and transcripts are encrypted in transit and at rest. Recordings are retained only as long as you configure.</p></div>
+        <div class="cell"><div class="n">Control</div><h3>You set the boundaries</h3>
+          <p>Define exactly what Vaani may promise, quote and book. Anything outside those rules goes to a human — never improvised.</p></div>
+        <div class="cell"><div class="n">Transparency</div><h3>Every call, on the record</h3>
+          <p>Full transcript, summary and outcome for each call in your dashboard. Nothing happens that you cannot audit afterwards.</p></div>
+      </div>
+    </div>
+  </section>
+
+  <section id="pricing" class="dark">
+    <div class="wrap">
+      <div class="rv">
+        <p class="eyebrow">Pricing</p>
+        <h2>Start free for 14 days.<br><em>No card required.</em></h2>
+        <p class="lede">Every plan includes the full AI receptionist. Scale numbers and minutes as you grow.</p>
+      </div>
+      <div class="plans" id="plans"><div style="color:var(--mute-dk);font-size:14px">Loading plans…</div></div>
+    </div>
+  </section>
+
+  <section class="dark">
+    <div class="wrap split">
+      <div class="rv"><p class="eyebrow">Why it matters</p></div>
+      <div class="rv">
+        <p class="quote">A missed call isn't a missed message. It's a customer who already booked somewhere else.</p>
+        <p class="eyebrow" style="margin:34px 0 0">The reason we built Vaani</p>
+      </div>
+    </div>
+  </section>
+
+  <section class="dark" style="text-align:center">
+    <div class="wrap rv">
+      <p class="eyebrow">Stop missing customers</p>
+      <h2 style="max-width:16ch; margin:0 auto">Put Vaani on the <em>front desk.</em></h2>
+      <div class="hero-cta" style="justify-content:center; margin-top:44px">
+        <a href="#pricing" class="btn btn-fill">Start free trial</a>
+        <a href="/app" class="btn btn-ghost-dk">Talk to Vaani first</a>
+      </div>
+    </div>
+  </section>
+</main>
+
+<footer>
+  <div class="foot">
+    <div><span class="mark">Vaani</span> &nbsp;·&nbsp; AI Receptionist</div>
+    <div style="display:flex; gap:26px; flex-wrap:wrap">
+      <a href="#pricing">Pricing</a><a href="/app">Live demo</a><a href="#trust">Security</a><a href="/docs">API</a>
+    </div>
+    <div>© <span id="yr"></span> Vaani</div>
+  </div>
+</footer>
+
+<div class="modal-bg" id="authModal">
+  <div class="modal">
+    <button class="x" id="authClose" aria-label="Close">×</button>
+    <h3 id="authTitle">Start your free trial</h3>
+    <p class="sub" id="authSub">14 days on us. No card required.</p>
+    <div class="tabs"><button id="tabUp" class="on">Create account</button><button id="tabIn">Sign in</button></div>
+    <div class="msg" id="authMsg"></div>
+    <form id="authForm">
+      <div class="fld su"><label for="fName">Full name</label><input id="fName" autocomplete="name" /></div>
+      <div class="fld su"><label for="fBiz">Business name</label><input id="fBiz" autocomplete="organization" /></div>
+      <div class="fld"><label for="fMail">Work email</label><input id="fMail" type="email" autocomplete="email" required /></div>
+      <div class="fld"><label for="fPass">Password</label><input id="fPass" type="password" required /></div>
+      <button type="submit" class="btn btn-fill" id="authGo">Create account</button>
+    </form>
+  </div>
+</div>
+
+<script type="module">
+  import { createHeroAvatar } from './lib/hero-avatar.js';
+
+  const stage = document.getElementById('stage');
+  const seq = document.getElementById('seq');
+  const cap1 = document.getElementById('cap1');
+  const cap2 = document.getElementById('cap2');
+  const cue = document.getElementById('cue');
+
+  const avatar = createHeroAvatar({
+    canvas: document.getElementById('heroCanvas'),
+    imageSrc: './assets/vaani-portrait.jpg',
+    onReady: () => document.getElementById('heroCanvas').classList.add('ready'),
+  });
+
+  const clamp01 = v => Math.min(1, Math.max(0, v));
+  // Fade in over [a,b], hold, then out over [c,d].
+  const band = (p, a, b, c, d) => Math.min(clamp01((p - a) / (b - a)), 1 - clamp01((p - c) / (d - c)));
+
+  // One rAF loop reading scroll position, rather than doing work inside the
+  // scroll event - keeps the choreography on the compositor's clock.
+  let ticking = false;
+  function update() {
+    ticking = false;
+    const runway = seq.offsetHeight - innerHeight;
+    const p = clamp01(scrollY / Math.max(1, runway));
+
+    avatar.setProgress(p);
+
+    // Hero copy starts fully visible and only lifts away as the camera pushes
+    // in - it must never fade *in*, or the page loads with a blank hero.
+    const o1 = 1 - clamp01((p - 0.16) / 0.18);
+    cap1.style.opacity = o1;
+    cap1.style.transform = `translateY(${-p * 60}px)`;
+    cap1.style.pointerEvents = o1 > 0.5 ? 'auto' : 'none';
+
+    // Statement takes over at the tightest point of the zoom.
+    const o2 = band(p, 0.42, 0.58, 0.80, 0.96);
+    cap2.style.opacity = o2;
+    cap2.style.transform = `translateY(${(1 - o2) * 26}px)`;
+
+    cue.style.opacity = 1 - clamp01(p / 0.12);
+
+    // Once the avatar has dissolved, drop the stage so the fixed layer is not
+    // compositing behind opaque content for the rest of the page.
+    stage.style.opacity = 1 - clamp01((p - 0.9) / 0.1);
+  }
+  addEventListener('scroll', () => {
+    if (!ticking) { ticking = true; requestAnimationFrame(update); }
+  }, { passive: true });
+  addEventListener('resize', update);
+  update();
+</script>
+
+<script>
+(() => {
+  const API = (() => {
+    const qs = new URLSearchParams(location.search).get('api');
+    if (qs !== null) {
+      const v = qs.replace(/\/+$/, '');
+      v ? localStorage.setItem('vaani_api', v) : localStorage.removeItem('vaani_api');
+      return v;
+    }
+    const saved = localStorage.getItem('vaani_api');
+    if (saved) return saved;
+    if (location.protocol === 'file:') return 'http://localhost:8000';
+    if (location.port === '8080') return `${location.protocol}//${location.hostname}:8000`;
+    return '';
+  })();
+
+  document.getElementById('yr').textContent = new Date().getFullYear();
+
+  const nav = document.getElementById('nav');
+  const onScroll = () => nav.classList.toggle('solid', scrollY > 40);
+  addEventListener('scroll', onScroll, { passive: true });
+  onScroll();
+
+  const io = new IntersectionObserver((es) => {
+    es.forEach(e => { if (e.isIntersecting) { e.target.classList.add('in'); io.unobserve(e.target); } });
+  }, { threshold: 0.16 });
+  document.querySelectorAll('.rv').forEach(el => io.observe(el));
+
+  const items = ['Clinics','Dental practices','Salons & spas','Real estate','Law firms','Auto service','Diagnostic labs','Coaching centres'];
+  document.getElementById('strip').innerHTML = [...items, ...items].map(t => `<span>${t}</span>`).join('');
+
+  // ---------- scripted call demo ----------
+  const script = [
+    { who:'Caller', text:'Hi, do you have anything open this Saturday morning?' },
+    { who:'Vaani', ai:true, text:'We do — 10:15 or 11:30 on Saturday. Which suits you better?' },
+    { who:'Caller', text:'11:30 works. And how much is the cleaning?' },
+    { who:'Vaani', ai:true, text:'₹1,200 for a standard cleaning. I have booked you for Saturday 11:30 and sent a confirmation by SMS.', chip:'Appointment booked' },
+  ];
+  const turnsEl = document.getElementById('demoTurns');
+  let played = false;
+  new IntersectionObserver((es) => {
+    if (!es[0].isIntersecting || played) return;
+    played = true;
+    script.forEach((t, i) => setTimeout(() => {
+      const d = document.createElement('div');
+      d.className = 'turn' + (t.ai ? ' ai' : '');
+      d.innerHTML = `<div class="who">${t.who}</div><div class="said">${t.text}</div>` + (t.chip ? `<span class="chip">✓ ${t.chip}</span>` : '');
+      turnsEl.appendChild(d);
+      requestAnimationFrame(() => d.classList.add('in'));
+    }, i * 1250));
+  }, { threshold: 0.4 }).observe(document.getElementById('demo'));
+
+  // ---------- voice sampler (real server TTS) ----------
+  const bars = document.getElementById('bars');
+  const vnote = document.getElementById('vnote');
+  let audio = null;
+  async function sample(btn, text, voice) {
+    if (audio) { audio.pause(); audio = null; }
+    const original = btn.textContent;
+    btn.disabled = true; btn.textContent = 'Generating…'; vnote.textContent = '';
+    try {
+      const r = await fetch(`${API}/api/tts`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ text, voice }),
+      });
+      if (!r.ok) {
+        vnote.textContent = r.status === 503
+          ? 'No server voice installed — see the Piper setup in the README.'
+          : `Could not generate audio (${r.status}).`;
+        return;
+      }
+      const url = URL.createObjectURL(await r.blob());
+      audio = new Audio(url);
+      bars.classList.add('on');
+      audio.onended = () => { bars.classList.remove('on'); URL.revokeObjectURL(url); };
+      await audio.play();
+    } catch (e) {
+      vnote.textContent = 'Network error — is the backend running?';
+    } finally {
+      btn.disabled = false; btn.textContent = original;
+    }
+  }
+  document.getElementById('playEn').onclick = (e) =>
+    sample(e.currentTarget, 'Good afternoon, thanks for calling. I can book you in for Saturday at eleven thirty. Shall I confirm that?', null);
+  document.getElementById('playHi').onclick = (e) =>
+    sample(e.currentTarget, 'नमस्ते, आपका स्वागत है। मैं आपकी क्या सहायता कर सकती हूँ?', 'hi');
+
+  // ---------- session ----------
+  const tokenKey = 'vaani_token';
+  let token = localStorage.getItem(tokenKey);
+  let user = null;
+  const navAuth = document.getElementById('navAuth');
+  const paintAuth = () => navAuth.textContent = user ? (user.full_name?.split(' ')[0] || 'Account') : 'Sign in';
+
+  (async () => {
+    if (!token) return;
+    try {
+      const r = await fetch(`${API}/api/auth/me`, { headers: { Authorization: `Bearer ${token}` } });
+      if (r.ok) { user = await r.json(); paintAuth(); }
+      else { token = null; localStorage.removeItem(tokenKey); }
+    } catch (e) {}
+  })();
+
+  // ---------- pricing ----------
+  const money = (paise, cur) =>
+    ((cur || 'inr').toLowerCase() === 'inr' ? '₹' : '$') + (paise / 100).toLocaleString('en-IN');
+
+  (async function loadPlans() {
+    const box = document.getElementById('plans');
+    let plans = [];
+    try { const r = await fetch(`${API}/api/plans`); if (r.ok) plans = await r.json(); } catch (e) {}
+    if (!plans.length) {
+      box.innerHTML = `<div style="color:var(--mute-dk);font-size:14px">Plans unavailable. Seed them with <code style="color:var(--violet)">python -m scripts.seed_plans</code>.</div>`;
+      return;
+    }
+    box.innerHTML = plans.map((p, i) => {
+      const custom = !p.price_monthly, featured = i === 1;
+      return `<div class="plan${featured ? ' feature' : ''}">
+        ${featured ? '<span class="tag">Most popular</span>' : ''}
+        <h3>${p.name}</h3><div class="desc">${p.description || ''}</div>
+        <div class="price">${custom ? 'Custom' : money(p.price_monthly, p.currency)}${custom ? '' : '<span class="per">/month</span>'}</div>
+        <ul class="feats">${(p.features || []).map(f => `<li>${f}</li>`).join('')}</ul>
+        <button class="btn ${featured ? 'btn-fill' : 'btn-ghost-dk'}" data-plan="${p.id}" data-custom="${custom}">${custom ? 'Talk to sales' : 'Start free trial'}</button>
+      </div>`;
+    }).join('');
+    box.querySelectorAll('button[data-plan]').forEach(b =>
+      b.onclick = () => choosePlan(b.dataset.plan, b.dataset.custom === 'true'));
+  })();
+
+  // ---------- auth ----------
+  const modal = document.getElementById('authModal'), msg = document.getElementById('authMsg');
+  const form = document.getElementById('authForm'), goBtn = document.getElementById('authGo');
+  const tabUp = document.getElementById('tabUp'), tabIn = document.getElementById('tabIn');
+  let mode = 'signup', pendingPlan = null;
+
+  function say(text, kind) { msg.className = 'msg' + (text ? ' show ' + kind : ''); msg.textContent = text; }
+  function setMode(m) {
+    mode = m;
+    tabUp.classList.toggle('on', m === 'signup'); tabIn.classList.toggle('on', m === 'signin');
+    document.querySelectorAll('.fld.su').forEach(el => el.style.display = m === 'signup' ? 'flex' : 'none');
+    goBtn.textContent = m === 'signup' ? 'Create account' : 'Sign in';
+    document.getElementById('authTitle').textContent = m === 'signup' ? 'Start your free trial' : 'Welcome back';
+    document.getElementById('authSub').textContent = m === 'signup' ? '14 days on us. No card required.' : 'Sign in to your Vaani account.';
+    document.getElementById('fPass').autocomplete = m === 'signup' ? 'new-password' : 'current-password';
+    say('');
+  }
+  const openModal = m => { setMode(m); modal.classList.add('open'); setTimeout(() => document.getElementById(m === 'signup' ? 'fName' : 'fMail').focus(), 60); };
+  const closeModal = () => { modal.classList.remove('open'); pendingPlan = null; };
+
+  tabUp.onclick = () => setMode('signup');
+  tabIn.onclick = () => setMode('signin');
+  document.getElementById('authClose').onclick = closeModal;
+  modal.onclick = e => { if (e.target === modal) closeModal(); };
+  addEventListener('keydown', e => { if (e.key === 'Escape') closeModal(); });
+  navAuth.onclick = e => { e.preventDefault(); user ? location.href = '/app' : openModal('signin'); };
+
+  function choosePlan(planId, custom) {
+    if (custom) { location.href = 'mailto:sales@vaani.ai?subject=Enterprise%20enquiry'; return; }
+    pendingPlan = planId;
+    user ? subscribe(planId) : openModal('signup');
+  }
+
+  async function subscribe(planId) {
+    try {
+      const r = await fetch(`${API}/api/subscriptions?plan_id=${encodeURIComponent(planId)}`, {
+        method: 'POST', headers: { Authorization: `Bearer ${token}` },
+      });
+      if (r.status === 409) { say('You already have an active subscription. Redirecting…', 'ok'); setTimeout(() => location.href = '/app', 1200); return; }
+      if (!r.ok) { const d = await r.json().catch(() => ({})); say(d.detail || 'Could not start the trial.', 'err'); return; }
+      say('Trial started. Taking you to Vaani…', 'ok');
+      setTimeout(() => location.href = '/app', 1200);
+    } catch (e) { say('Network error — is the backend running?', 'err'); }
+  }
+
+  form.onsubmit = async (e) => {
+    e.preventDefault();
+    goBtn.disabled = true; say('');
+    const email = document.getElementById('fMail').value.trim();
+    const password = document.getElementById('fPass').value;
+    const payload = mode === 'signup'
+      ? { email, password, full_name: document.getElementById('fName').value.trim() || email.split('@')[0], business_name: document.getElementById('fBiz').value.trim() || undefined }
+      : { email, password };
+    try {
+      const r = await fetch(`${API}/api/auth/${mode === 'signup' ? 'register' : 'login'}`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload),
+      });
+      const data = await r.json().catch(() => ({}));
+      if (!r.ok) { say(typeof data.detail === 'string' ? data.detail : 'Could not complete that.', 'err'); goBtn.disabled = false; return; }
+      token = data.access_token; user = data.user;
+      localStorage.setItem(tokenKey, token); paintAuth();
+      if (pendingPlan) await subscribe(pendingPlan);
+      else { say('Signed in. Taking you to Vaani…', 'ok'); setTimeout(() => location.href = '/app', 1000); }
+    } catch (err) { say('Network error — is the backend running?', 'err'); }
+    goBtn.disabled = false;
+  };
+
+  setMode('signup');
+})();
+</script>
+</body>
+</html>

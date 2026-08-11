@@ -41,3 +41,8 @@ Thumbs.db
 # Logs
 *.log
 logs/
+
+# Speech model weights - large binaries, downloaded per environment
+# (piper voices ~64-114MB each; see backend/README or .env.example)
+backend/models/
+*.onnx

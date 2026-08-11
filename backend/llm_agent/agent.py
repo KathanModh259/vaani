@@ -450,6 +450,28 @@ class LLMAgent:
 
         response_data = await self._generate_response(conversation, user_text)
 
+        # Prefer a real LLM reply when one is configured. The rules engine above
+        # still runs first because it decides which action (booking, escalation)
+        # to execute; the LLM only replaces the wording the caller hears, so a
+        # missing or failing API key degrades to the scripted answer rather than
+        # breaking the call.
+        try:
+            from llm_agent import llm_provider
+
+            if llm_provider.is_configured():
+                llm_text = await llm_provider.generate(
+                    turns=conversation.turns,
+                    user_text=user_text,
+                    business_name=getattr(conversation, 'business_name', '') or '',
+                    business_context=conversation.context.get('business_context', ''),
+                )
+                if llm_text:
+                    response_data = dict(response_data)
+                    response_data['response'] = llm_text
+                    response_data['source'] = 'llm'
+        except Exception as e:
+            logger.warning("LLM augmentation skipped: %s", e)
+
         action_result = None
         if response_data.get('action_required'):
             action = response_data.get('action')
@@ -481,11 +503,16 @@ class LLMAgent:
             escalation_result = await escalation_action.execute(conversation, db_session, conversation.business_id)
             agent_response += "\n\n" + escalation_result.message
 
+        intent = response_data.get('intent')
         return {
             'response': agent_response,
             'conversation': conversation,
             'action': action_result,
             'escalated': conversation.should_escalate(),
+            # Callers persist this as the call outcome; without it every call
+            # is filed as a generic FAQ answer and bookings never show up.
+            'intent': getattr(intent, 'name', None),
+            'confidence': response_data.get('confidence', 0.0),
         }
 
 

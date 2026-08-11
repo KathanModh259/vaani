@@ -5,5 +5,18 @@ __pycache__
 *.pyc
 .env
 *.db
-frontend/
 README.md
+
+# Speech model weights (~175MB) - kept out of the build context.
+# Either build with --build-arg WITH_SPEECH=1 to download them in the image,
+# or mount a host directory at /app/backend/models/piper at runtime.
+backend/models/
+*.onnx
+
+# Test/dev artifacts
+.pytest_cache/
+tests/
+alembic/versions/__pycache__/
+
+# NOTE: frontend/ must NOT be ignored - app.py serves the landing page and
+# demo from it, and excluding it makes every page 404 in the container.

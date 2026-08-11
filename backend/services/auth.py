@@ -4,21 +4,44 @@ import secrets
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 
+import bcrypt
 import jwt
-from passlib.context import CryptContext
 
 from db import UserSQL, APIKeySQL
 
 logger = logging.getLogger(__name__)
-pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
+
+# bcrypt directly rather than passlib: passlib 1.7.4 (unmaintained since 2020)
+# probes its backend with a >72-byte password, and bcrypt >= 4.1 raises
+# ValueError instead of truncating, which broke every hash and verify call.
+# The output is the same $2b$ format, so hashes written by either are portable.
+
+# bcrypt only considers the first 72 bytes of a password.
+BCRYPT_MAX_BYTES = 72
+
+
+def _prepare(password: str) -> bytes:
+    """Encode to the bytes bcrypt will actually read.
+
+    Truncating on a UTF-8 character boundary avoids handing bcrypt a partial
+    multi-byte sequence when a long password ends mid-character.
+    """
+    return password.encode("utf-8")[:BCRYPT_MAX_BYTES].decode("utf-8", "ignore").encode("utf-8")
 
 
 def verify_password(plain_password: str, hashed_password: str) -> bool:
-    return pwd_context.verify(plain_password, hashed_password)
+    if not plain_password or not hashed_password:
+        return False
+    try:
+        return bcrypt.checkpw(_prepare(plain_password), hashed_password.encode("utf-8"))
+    except (ValueError, TypeError):
+        # Malformed or unrecognised hash - treat as a failed login, not a 500.
+        logger.warning("Password verification failed: malformed hash")
+        return False
 
 
 def get_password_hash(password: str) -> str:
-    return pwd_context.hash(password)
+    return bcrypt.hashpw(_prepare(password), bcrypt.gensalt()).decode("utf-8")
 
 
 def create_access_token(

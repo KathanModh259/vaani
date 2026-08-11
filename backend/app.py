@@ -4,17 +4,22 @@ import asyncio
 import logging
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 
 from db import Base, DatabaseManager
 from api.routes.voice import router as voice_router
 from api.routes.chat import router as chat_router
 from api.routes.dashboard import router as dashboard_router
+from api.routes.speech import router as speech_router
 from api.routes.auth import router as auth_router
 from api.routes.subscriptions import router as subscriptions_router
 from api.core.exception_handlers import register_exception_handlers
-from api.core.middleware import RateLimitMiddleware, RequestLoggingMiddleware
+from api.core.middleware import (
+    RateLimitMiddleware,
+    RequestLoggingMiddleware,
+    SecurityHeadersMiddleware,
+)
 from scripts.config import settings
 from sqlalchemy.ext.asyncio import create_async_engine
 
@@ -25,9 +30,40 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
+def check_production_readiness():
+    """Refuse to start a production deploy with insecure defaults.
+
+    The JWT secret signs every session token: shipping the placeholder means
+    anyone who reads this repo can mint an admin token. Failing loudly at boot
+    is far better than discovering it after launch.
+    """
+    if settings.ENVIRONMENT.lower() not in ("production", "prod"):
+        if settings.JWT_SECRET_KEY == "change-me-in-production":
+            logger.warning(
+                "JWT_SECRET_KEY is the default placeholder - fine for local dev, "
+                "but set a real one before deploying (see DEPLOYMENT.md)."
+            )
+        return
+
+    problems = []
+    if settings.JWT_SECRET_KEY == "change-me-in-production" or len(settings.JWT_SECRET_KEY) < 32:
+        problems.append("JWT_SECRET_KEY must be set to a random value of 32+ chars")
+    if settings.DEBUG:
+        problems.append("DEBUG must be false in production")
+    if any("localhost" in o or "127.0.0.1" in o for o in settings.CORS_ORIGINS):
+        logger.warning("CORS_ORIGINS still contains localhost entries in production")
+
+    if problems:
+        raise RuntimeError(
+            "Refusing to start in production with insecure configuration:\n  - "
+            + "\n  - ".join(problems)
+        )
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     logger.info("Starting AI Phone Receptionist...")
+    check_production_readiness()
 
     try:
         async with asyncio.timeout(settings.DB_CONNECTION_TIMEOUT):
@@ -53,6 +89,15 @@ async def lifespan(app: FastAPI):
         logger.info("TTS engines initialized")
     except Exception as e:
         logger.warning(f"TTS init skipped: {e}")
+
+    # Load the Piper voice now so the first visitor does not pay the
+    # multi-hundred-megabyte model load.
+    try:
+        from tts import piper_tts
+        if await piper_tts.warmup():
+            logger.info("Piper voice warm: %s", piper_tts.status().get("default"))
+    except Exception as e:
+        logger.warning(f"Piper warmup skipped: {e}")
 
     try:
         db_manager = DatabaseManager(settings.DATABASE_URL)
@@ -100,16 +145,18 @@ register_exception_handlers(app)
 
 app.add_middleware(RequestLoggingMiddleware)
 app.add_middleware(RateLimitMiddleware)
+app.add_middleware(SecurityHeadersMiddleware)
 
 app.include_router(auth_router, prefix="/api")
 app.include_router(subscriptions_router, prefix="/api")
 app.include_router(voice_router, prefix="/api/voice")
 app.include_router(chat_router, prefix="/api")
+app.include_router(speech_router, prefix="/api")
 app.include_router(dashboard_router, prefix="/api")
 
 
-@app.get("/")
-async def root():
+@app.get("/api/info")
+async def api_info():
     return {
         "name": "AI Phone Receptionist API",
         "version": "0.1.0",
@@ -181,3 +228,75 @@ async def cleanup_resources(app: FastAPI):
             await db_manager.close()
     except Exception as e:
         logger.warning(f"DB cleanup skipped: {e}")
+
+
+# Serve the Vaani frontend directly from the API server:
+#   /     -> landing.html  (marketing site, pricing, signup)
+#   /app  -> index.html    (interactive particle-avatar demo)
+# Declared before the catch-all mount so these win; the mount then covers
+# lib/, assets/ and anything else. /health, /api/* and /docs are registered
+# earlier still, so they always take precedence.
+from pathlib import Path
+
+from fastapi.responses import FileResponse, PlainTextResponse, Response
+from fastapi.staticfiles import StaticFiles
+
+FRONTEND_DIR = Path(__file__).resolve().parent.parent / "frontend"
+LANDING_FILE = FRONTEND_DIR / "landing.html"
+APP_FILE = FRONTEND_DIR / "index.html"
+DASHBOARD_FILE = FRONTEND_DIR / "dashboard.html"
+
+if FRONTEND_DIR.is_dir():
+
+    # Browsers heuristically cache HTML that carries no Cache-Control, which
+    # means edits to these pages silently do not show up on refresh. "no-cache"
+    # still allows a 304 via ETag, so this costs a revalidation, not bandwidth.
+    HTML_HEADERS = {"Cache-Control": "no-cache, must-revalidate"}
+
+    @app.get("/", include_in_schema=False)
+    async def serve_landing():
+        # Fall back to the demo if the marketing page has not been added yet.
+        target = LANDING_FILE if LANDING_FILE.is_file() else APP_FILE
+        if not target.is_file():
+            raise HTTPException(status_code=404, detail="Frontend not found")
+        return FileResponse(target, headers=HTML_HEADERS)
+
+    @app.get("/app", include_in_schema=False)
+    async def serve_app():
+        if not APP_FILE.is_file():
+            raise HTTPException(status_code=404, detail="Demo app not found")
+        return FileResponse(APP_FILE, headers=HTML_HEADERS)
+
+    @app.get("/dashboard", include_in_schema=False)
+    async def serve_dashboard():
+        if not DASHBOARD_FILE.is_file():
+            raise HTTPException(status_code=404, detail="Dashboard not found")
+        return FileResponse(DASHBOARD_FILE, headers=HTML_HEADERS)
+
+    @app.get("/robots.txt", include_in_schema=False)
+    async def robots():
+        base = settings.FRONTEND_URL.rstrip("/")
+        return PlainTextResponse(
+            "User-agent: *\n"
+            "Allow: /\n"
+            "Disallow: /app\n"
+            "Disallow: /dashboard\n"
+            "Disallow: /api/\n"
+            "Disallow: /docs\n"
+            f"Sitemap: {base}/sitemap.xml\n"
+        )
+
+    @app.get("/sitemap.xml", include_in_schema=False)
+    async def sitemap():
+        base = settings.FRONTEND_URL.rstrip("/")
+        return Response(
+            content=(
+                '<?xml version="1.0" encoding="UTF-8"?>\n'
+                '<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n'
+                f"  <url><loc>{base}/</loc><priority>1.0</priority></url>\n"
+                "</urlset>\n"
+            ),
+            media_type="application/xml",
+        )
+
+    app.mount("/", StaticFiles(directory=str(FRONTEND_DIR), html=True), name="frontend")

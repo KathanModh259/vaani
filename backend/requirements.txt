@@ -15,6 +15,13 @@ openai>=1.6.0
 elevenlabs>=0.3.0
 asyncpg>=0.29.0
 aiosqlite>=0.20.0
-passlib[bcrypt]>=1.7.4
+bcrypt>=4.0.0
 pyjwt>=2.8.0
 stripe>=8.0.0
+
+# Free offline speech engines. Optional: the app runs without them and falls
+# back to browser speech, but installing these makes the hosted demo talk
+# without any API key or per-minute billing.
+#   pip install piper-tts faster-whisper
+# piper-tts>=1.2.0
+# faster-whisper>=1.0.0

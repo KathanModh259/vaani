@@ -78,10 +78,15 @@ class ConversationState:
         return "\n".join(context_parts)
     
     def update_intent(self, intent: str, confidence: float):
-        """Update the detected intent."""
+        """Update the detected intent.
+
+        This is telemetry, not dialogue. It used to be written into the turn
+        list, which leaked "Detected intent: ..." into saved transcripts and,
+        worse, fed it to the LLM as something the agent had said.
+        """
         self.intent = intent
         self.confidence = confidence
-        self.add_turn('agent', f"Detected intent: {intent} with confidence {confidence}")
+        logger.debug("Intent %s (confidence %.2f) for call %s", intent, confidence, self.call_sid)
     
     def increment_clarification(self):
         """Increment clarification attempt counter."""

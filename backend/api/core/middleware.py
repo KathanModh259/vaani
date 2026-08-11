@@ -57,3 +57,43 @@ class RequestLoggingMiddleware(BaseHTTPMiddleware):
             duration_ms,
         )
         return response
+
+
+class SecurityHeadersMiddleware(BaseHTTPMiddleware):
+    """Baseline hardening headers for the public site.
+
+    HSTS is only sent over HTTPS, so it is safe to leave enabled in dev where
+    everything is plain http. The CSP allows Google Fonts (the landing page
+    uses Instrument Sans/Serif) and inline styles/scripts, which the current
+    single-file pages rely on; tighten it if those move to external files.
+    """
+
+    CSP = (
+        "default-src 'self'; "
+        "script-src 'self' 'unsafe-inline'; "
+        "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; "
+        "font-src 'self' https://fonts.gstatic.com data:; "
+        "img-src 'self' data: blob:; "
+        "media-src 'self' blob:; "
+        "connect-src 'self'; "
+        "frame-ancestors 'none'; "
+        "base-uri 'self'; "
+        "form-action 'self'"
+    )
+
+    async def dispatch(self, request: Request, call_next):
+        response = await call_next(request)
+        response.headers.setdefault("X-Content-Type-Options", "nosniff")
+        response.headers.setdefault("X-Frame-Options", "DENY")
+        response.headers.setdefault("Referrer-Policy", "strict-origin-when-cross-origin")
+        response.headers.setdefault("Permissions-Policy", "geolocation=(), camera=(), payment=()")
+
+        # Docs pages need a looser policy than the app shell.
+        if not request.url.path.startswith(("/docs", "/redoc", "/openapi.json")):
+            response.headers.setdefault("Content-Security-Policy", self.CSP)
+
+        if request.url.scheme == "https":
+            response.headers.setdefault(
+                "Strict-Transport-Security", "max-age=31536000; includeSubDomains"
+            )
+        return response
