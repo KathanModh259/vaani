@@ -1,0 +1,11 @@
+[tool.ruff]
+# Python 3.11 is what the image runs (see Dockerfile).
+target-version = "py311"
+line-length = 120
+
+[tool.ruff.lint]
+# Ruff's rule *defaults* change between minor releases: 0.17 started applying
+# I001 and UP by default, which turned a green CI red without a single line of
+# code changing. Selecting the set explicitly makes lint deterministic on
+# whatever version pip resolves, and keeps style debates out of the diff.
+select = ["E4", "E7", "E9", "F"]
