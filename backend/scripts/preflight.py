@@ -126,8 +126,13 @@ def check(base: str, do_book: bool, require_phone: bool = False) -> Result:
               hsts or "absent (ok on http)")
         r.add((headers.get("X-Content-Type-Options") == "nosniff")
               or not https, "X-Content-Type-Options: nosniff")
-        r.add(not any(v == "uvicorn" for v in headers.values()),
-              "proxy does not advertise the server", "")
+        # Caddy strips the Server header. Hitting the origin directly shows
+        # "uvicorn", which is expected while testing a container on localhost,
+        # and a leak worth failing on for a public https deployment.
+        leaks = any(v == "uvicorn" for v in headers.values())
+        (r.add if https else r.warn)(
+            not leaks, "proxy does not advertise the server",
+            "Server: uvicorn is visible" if leaks else "")
     except (urllib.error.URLError, TimeoutError, OSError) as e:
         r.add(False, "reachable over the network", str(e))
         return r

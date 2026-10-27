@@ -460,6 +460,16 @@ class BookingFlow:
     async def _advance(self, ctx, draft: Dict[str, Any], text: str) -> str:
         profile = ctx.profile
 
+        # A brand-new signup has opening hours but no service catalogue yet.
+        # There is nothing valid to offer, so offering "We have ." and then
+        # failing is worse than taking a callback. Same when the owner turned
+        # booking off on purpose.
+        if not profile.services or not profile.booking_enabled:
+            draft["handoff"] = True
+            return ("I can arrange that, but I don't have this business's booking "
+                    "list in front of me - let me have someone from the team call "
+                    "you back to confirm it.")
+
         service = next((s for s in profile.services if s.id == draft.get("service")), None)
         if service is None:
             return self._ask(draft, "service",

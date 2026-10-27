@@ -65,7 +65,7 @@ implemented; add a number and a public URL" is honest and still impressive.
 > Same calendar exposed as an MCP server, so an Alan agent can book without a
 > phone call at all.
 >
-> MIT. 231 tests. Repo + live demo below.
+> MIT. 232 tests. Repo + live demo below.
 
 Then attach the video, the repo link and the demo link. Mention the model by
 name.
@@ -79,7 +79,7 @@ Follow [DEMO.md](DEMO.md). The two beats that matter:
 
 ## Checklist
 
-- [ ] `cd backend && python -m pytest -q` — 231 passed, 1 skipped
+- [ ] `cd backend && python -m pytest -q` — 232 passed, 1 skipped
 - [ ] `cd backend && ruff check .` — clean
 - [ ] `GET /health/ready` returns `ready`
 - [ ] `GET /api/llm/status` shows a provider with `open_weights: true`

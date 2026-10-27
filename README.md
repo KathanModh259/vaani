@@ -225,7 +225,7 @@ Building alone is not enough. An image once died on `import sqlalchemy` because
 its wheelhouse was built `--no-deps`, and another died without `alembic` in
 `requirements.txt`; both were found by running the image, not by building it.
 
-`pytest` runs 231 tests (1 skipped on SQLite, 232 on Postgres) — both databases are in CI. The suite covers the concurrency race, prompt-injection refusals, encrypted transcripts, CSRF on the cookie session, Twilio signature checks, the MCP server and the zero-key booking dialogue.
+`pytest` runs 232 tests (1 skipped on SQLite, 233 on Postgres) — both databases are in CI. The suite covers the concurrency race, prompt-injection refusals, encrypted transcripts, CSRF on the cookie session, Twilio signature checks, the MCP server and the zero-key booking dialogue.
 
 ## Deploy
 

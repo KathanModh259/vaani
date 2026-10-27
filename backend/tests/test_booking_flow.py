@@ -211,6 +211,38 @@ async def test_an_faq_midway_does_not_lose_the_booking(client, session, monkeypa
     assert "name" in r["response"].lower()              # still mid-booking
 
 
+async def test_a_new_business_with_no_services_takes_a_callback(client, session, monkeypatch):
+    """Signup seeds opening hours but no service list. The first thing a new
+    owner's caller hears must not be "We offer . Which one would you like?"."""
+    from llm_agent import llm_provider
+    import uuid as _uuid
+
+    from db import BusinessSQL
+    from services.business_profile import seed_default_hours
+
+    monkeypatch.setattr(llm_provider, "is_configured", lambda: False)
+    bid = _uuid.uuid4().hex
+    session.add(BusinessSQL(id=bid, name="Empty Clinic", phone="", email="e@e.in"))
+    await session.flush()
+    seed_default_hours(session, bid)
+    await session.commit()
+
+    # Point the agent at that business directly: the public chat route always
+    # resolves to the seeded demo clinic.
+    from llm_agent.agent import get_agent
+    from services.business_profile import load_profile
+
+    profile = await load_profile(session, bid)
+    result = await get_agent().handle_turn(
+        session, profile, [], "I want to book a cleaning tomorrow at 10 am", channel="web",
+    )
+    assert "We offer ." not in result.reply
+    assert "team" in result.reply.lower()
+    assert result.escalated is True
+    assert result.booked == []
+    assert await appointments(session) == []
+
+
 async def test_three_misses_hands_off_instead_of_looping(client, session, monkeypatch):
     from llm_agent import llm_provider
     monkeypatch.setattr(llm_provider, "is_configured", lambda: False)
