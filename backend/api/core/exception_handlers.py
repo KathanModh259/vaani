@@ -1,5 +1,6 @@
 import logging
 from fastapi import FastAPI, Request, HTTPException
+from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 
 logger = logging.getLogger(__name__)
@@ -14,6 +15,30 @@ def register_exception_handlers(app: FastAPI):
             status_code=exc.status_code,
             content={"detail": exc.detail},
             headers=getattr(exc, "headers", None) or {},
+        )
+
+    @app.exception_handler(RequestValidationError)
+    async def validation_exception_handler(request: Request, exc: RequestValidationError):
+        """Return one readable sentence instead of pydantic's error array.
+
+        Clients render `detail` directly; handing them a list of dicts means
+        the user sees a generic "something went wrong" instead of the actual
+        problem ("Password must be at least 8 characters").
+        """
+        messages = []
+        for err in exc.errors():
+            msg = err.get("msg", "Invalid value")
+            # Pydantic v2 prefixes custom ValueErrors with "Value error, ".
+            msg = msg.replace("Value error, ", "")
+            field = next(
+                (str(p) for p in err.get("loc", ()) if p not in ("body", "query", "path")),
+                None,
+            )
+            messages.append(f"{field.replace('_', ' ').capitalize()}: {msg}" if field else msg)
+
+        return JSONResponse(
+            status_code=422,
+            content={"detail": " ".join(messages) or "Invalid request."},
         )
 
     @app.exception_handler(Exception)

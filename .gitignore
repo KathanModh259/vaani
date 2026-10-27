@@ -3,10 +3,11 @@
 *.sqlite
 *.sqlite3
 
-# Environment files
+# Environment files. .env.* covers backups and per-environment copies;
+# the example must stay tracked so a clone documents every setting.
 .env
-.env.local
-.env.*.local
+.env.*
+!.env.example
 
 # Scraped/cached data
 epiminds/
@@ -46,3 +47,6 @@ logs/
 # (piper voices ~64-114MB each; see backend/README or .env.example)
 backend/models/
 *.onnx
+
+# Database dumps from the compose backup service
+backups/

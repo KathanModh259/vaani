@@ -1,7 +1,13 @@
 fastapi>=0.110.0
 uvicorn[standard]>=0.29.0
 sqlalchemy[asyncio]>=2.0.0
+# Migrations. Declared explicitly: it is imported by db/migrate.py at boot,
+# so a missing alembic takes the container down before it serves a request.
+alembic>=1.13.0
 pydantic>=2.5.0
+# zoneinfo has no system tz database on Windows or slim images; without this
+# every business-hours calculation raises ZoneInfoNotFoundError.
+tzdata>=2024.1
 python-dotenv>=1.0.0
 python-multipart>=0.0.9
 aiohttp>=3.9.0
@@ -15,9 +21,17 @@ openai>=1.6.0
 elevenlabs>=0.3.0
 asyncpg>=0.29.0
 aiosqlite>=0.20.0
+# Encrypts call transcripts at rest. It was installed transitively in
+# development and missing from every built image, so transcripts were
+# written in plaintext while the site promised encryption.
+cryptography>=42.0.0
 bcrypt>=4.0.0
 pyjwt>=2.8.0
 stripe>=8.0.0
+# Shared rate limits across replicas (optional at runtime: set REDIS_URL).
+redis>=5.0
+# Error tracking (optional at runtime: set SENTRY_DSN).
+sentry-sdk[fastapi]>=2.0
 
 # Free offline speech engines. Optional: the app runs without them and falls
 # back to browser speech, but installing these makes the hosted demo talk

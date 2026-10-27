@@ -35,6 +35,9 @@ def _resolve_tts_provider() -> str:
     if choice and choice != "auto":
         return choice
 
+    # Sarvam first: its voices are native in Hindi and Gujarati.
+    if settings.SARVAM_API_KEY:
+        return "sarvam"
     if settings.ELEVENLABS_API_KEY:
         return "elevenlabs"
 
@@ -71,6 +74,7 @@ async def speech_status():
         "tts": {
             "provider": _resolve_tts_provider(),
             "configured": settings.TTS_PROVIDER,
+            "sarvam": {"available": bool(settings.SARVAM_API_KEY)},
             "elevenlabs": {"available": bool(settings.ELEVENLABS_API_KEY)},
             "piper": piper_tts.status(),
         },
@@ -156,6 +160,18 @@ async def text_to_speech(body: TTSRequest):
 
     provider = _resolve_tts_provider()
 
+    if provider == "sarvam":
+        from tts import sarvam_tts
+
+        if not settings.SARVAM_API_KEY:
+            raise HTTPException(status_code=503, detail="Sarvam key not configured")
+        try:
+            audio = await sarvam_tts.synthesize(text)
+        except Exception as e:
+            logger.warning("Sarvam TTS failed: %s", e)
+            raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail="TTS provider error")
+        return Response(content=audio, media_type="audio/wav", headers={"Cache-Control": "no-store"})
+
     if provider == "elevenlabs":
         if not settings.ELEVENLABS_API_KEY:
             raise HTTPException(status_code=503, detail="ElevenLabs key not configured")
@@ -213,14 +229,25 @@ async def speech_to_text(
         from stt.deepgram_stt import DeepgramSTT
 
         engine = DeepgramSTT()
-        await engine.initialize()
         try:
-            result = await engine.transcribe(data, session_id="web", is_final=True)
+            await engine.initialize()
+        except RuntimeError as e:
+            # Not configured is a 503 (try another provider), not a 502.
+            raise HTTPException(status_code=503, detail=str(e))
+
+        suffix = "." + (audio.filename or "clip.webm").rsplit(".", 1)[-1]
+        mimetype = audio.content_type or {
+            ".webm": "audio/webm", ".wav": "audio/wav", ".mp3": "audio/mpeg",
+            ".ogg": "audio/ogg", ".m4a": "audio/mp4",
+        }.get(suffix.lower(), "audio/webm")
+        try:
+            result = await engine.transcribe(data, session_id="web", is_final=True,
+                                             language=language, mimetype=mimetype)
         except Exception as e:
             logger.warning("Deepgram transcription failed: %s", e)
             raise HTTPException(status_code=502, detail="Transcription failed")
         finally:
             await engine.cleanup()
-        return {"text": result.get("transcript", ""), "language": language}
+        return {"text": result["transcript"], "language": result.get("language") or language}
 
     raise HTTPException(status_code=503, detail=f"Unknown STT provider: {provider}")

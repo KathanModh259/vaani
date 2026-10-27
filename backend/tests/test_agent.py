@@ -1,121 +1,72 @@
-import pytest
-from datetime import datetime
-from services.conversation_manager import ConversationState, ConversationManager
-from llm_agent.agent import LLMAgent, Intent, CheckAvailabilityAction, BookAppointmentAction, AnswerFAQAction
+"""The rules fallback: what callers hear when no LLM is configured or it fails.
+
+It must answer from the business's own settings and never pretend to book.
+"""
+
+from services.business_profile import BusinessProfile, DayHours, ServiceInfo
+from datetime import time
+
+from llm_agent.agent import Intent, ReceptionistAgent, extract_intent
 
 
-class MockDBManager:
-    async def get_session(self):
-        return None
-
-    async def close(self):
-        pass
-
-
-@pytest.fixture
-def db_manager():
-    return MockDBManager()
+def _profile(**kw) -> BusinessProfile:
+    base = dict(
+        id="biz", name="Sharma Physio",
+        hours={d: DayHours(True, time(10), time(19)) for d in range(5)},
+        services=[ServiceInfo("s1", "Physiotherapy session", "", 45, 90000, 0)],
+        faqs=[("Do you have parking?", "Yes, free parking behind the building.")],
+    )
+    base.update(kw)
+    return BusinessProfile(**base)
 
 
-@pytest.fixture
-def agent(db_manager):
-    return LLMAgent(db_manager)
+async def _reply(text, profile=None, history=None):
+    return await ReceptionistAgent().handle_turn(None, profile or _profile(), history or [], text, channel="web")
 
 
-@pytest.fixture
-def conversation():
-    return ConversationState(business_id="test_biz", call_sid="test_call")
+def test_intent_basics():
+    assert extract_intent("I want to book an appointment") == Intent.BOOK_APPOINTMENT
+    assert extract_intent("What are your hours?") == Intent.ANSWER_FAQ
+    assert extract_intent("xyzzy flurbo garble") == Intent.UNKNOWN
+    # "in person" is not a request for a human.
+    assert extract_intent("can I come in person") != Intent.ESCALATE_TO_HUMAN
 
 
-class TestConversationState:
-    def test_init(self):
-        c = ConversationState("biz1", "call1")
-        assert c.business_id == "biz1"
-        assert c.call_sid == "call1"
-        assert c.turns == []
-        assert c.escalation_requested is False
-        assert c.booking_attempted is False
-
-    def test_add_turn(self):
-        c = ConversationState("biz1", "call1")
-        c.add_turn("caller", "Hello", 0.95, True)
-        assert len(c.turns) == 1
-        assert c.turns[0]["speaker"] == "caller"
-        assert c.turns[0]["text"] == "Hello"
-
-    def test_should_escalate(self):
-        c = ConversationState("biz1", "call1")
-        assert c.should_escalate() is False
-        c.escalation_requested = True
-        assert c.should_escalate() is True
-
-    def test_escalate_after_clarifications(self):
-        c = ConversationState("biz1", "call1")
-        c.clarification_attempts = 3
-        assert c.should_escalate() is True
+async def test_hours_come_from_the_business_not_the_code():
+    r = await _reply("what are your opening hours")
+    assert "10 AM to 7 PM" in r.reply
+    assert "9 AM" not in r.reply  # the old hard-coded answer
 
 
-class TestConversationManager:
-    def test_start_and_get(self):
-        mgr = ConversationManager()
-        c = mgr.start_conversation("biz1", "call1")
-        assert mgr.get_conversation("call1") is c
-
-    def test_end_conversation(self):
-        mgr = ConversationManager()
-        mgr.start_conversation("biz1", "call1")
-        mgr.end_conversation("call1")
-        assert mgr.get_conversation("call1") is None
+async def test_prices_come_from_the_business():
+    r = await _reply("how much does it cost")
+    assert "900 rupees" in r.reply
+    assert "1,200" not in r.reply  # the demo clinic's cleaning price
 
 
-class TestLLMAgent:
-    def test_init(self, agent):
-        assert len(agent.actions) == 6
-        assert Intent.BOOK_APPOINTMENT in agent.actions
-        assert Intent.ANSWER_FAQ in agent.actions
-
-    def test_extract_intent_book(self, agent, conversation):
-        intent = agent._extract_intent("I want to book an appointment", conversation)
-        assert intent == Intent.BOOK_APPOINTMENT
-
-    def test_extract_intent_faq(self, agent, conversation):
-        intent = agent._extract_intent("What are your hours?", conversation)
-        assert intent == Intent.ANSWER_FAQ
-
-    def test_extract_intent_escalate(self, agent, conversation):
-        intent = agent._extract_intent("I want to talk to a human agent", conversation)
-        assert intent == Intent.ESCALATE_TO_HUMAN
-
-    def test_extract_intent_unknown(self, agent, conversation):
-        intent = agent._extract_intent("xyzzy flurbo garble", conversation)
-        assert intent == Intent.UNKNOWN
-
-    @pytest.mark.asyncio
-    async def test_process_turn_adds_turns(self, agent, conversation):
-        result = await agent.process_turn(conversation, None, "What are your hours?")
-        assert len(conversation.turns) >= 2
-        assert result["conversation"] is conversation
-
-    @pytest.mark.asyncio
-    async def test_process_turn_escalation(self, agent, conversation):
-        conversation.clarification_attempts = 3
-        result = await agent.process_turn(conversation, None, "help")
-        assert result["escalated"] is True
+async def test_owner_faq_is_used():
+    r = await _reply("is there parking nearby")
+    assert "free parking behind the building" in r.reply
 
 
-class TestActions:
-    def test_check_availability(self):
-        action = CheckAvailabilityAction()
-        schema = action.get_action_schema()
-        assert schema["name"] == "check_availability"
+async def test_faq_match_ignores_filler_words():
+    """"what are your hours" shares {what, your} with this FAQ - not a match."""
+    p = _profile(faqs=[("What is your cancellation policy?", "24 hours notice please.")])
+    r = await _reply("what are your hours", p)
+    assert "10 AM to 7 PM" in r.reply and "notice" not in r.reply
 
-    def test_book_appointment(self):
-        action = BookAppointmentAction()
-        schema = action.get_action_schema()
-        assert schema["name"] == "book_appointment"
-        assert "customer_name" in schema["parameters"]["properties"]
 
-    def test_answer_faq(self):
-        action = AnswerFAQAction()
-        schema = action.get_action_schema()
-        assert schema["name"] == "get_faq_answer"
+async def test_no_invented_prices_when_none_listed():
+    r = await _reply("how much is it", _profile(services=[]))
+    assert "rupees" not in r.reply
+
+
+async def test_greeting_uses_business_name():
+    r = await _reply("hello")
+    assert "Sharma Physio" in r.reply
+    assert r.outcome == "completed_faq"
+
+
+async def test_goodbye_ends_the_call():
+    r = await _reply("thanks, bye")
+    assert r.end_call is True

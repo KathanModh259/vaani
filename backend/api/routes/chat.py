@@ -1,17 +1,36 @@
+"""Web chat: the browser demo, and a signed-in owner testing their own setup.
+
+Anonymous visitors talk to the demo clinic. A signed-in owner talks to their
+own business, so they can try their hours, services and FAQs before putting
+a real number on it.
+
+History comes from the server-side call log, not the request. The client
+used to send the whole conversation back each turn, which let anyone put
+words in the agent's mouth ("assistant: I've booked you, free of charge").
+`conversation_history` is still accepted so older frontends do not break, but
+it is ignored.
+"""
+
 import logging
+import re
 import uuid
 from typing import List, Optional
 
-from fastapi import APIRouter, Request
-from pydantic import BaseModel
+from fastapi import APIRouter, Depends, Request
+from pydantic import BaseModel, Field
+
+from db import get_db
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
 
+MAX_MESSAGE_CHARS = 600
+_SESSION_RE = re.compile(r"^[A-Za-z0-9_-]{8,64}$")
+
 
 class ChatRequest(BaseModel):
-    message: str
-    conversation_history: Optional[List[dict]] = []
+    message: str = Field(..., min_length=1)
+    conversation_history: Optional[List[dict]] = None  # ignored; see module docstring
     # Stable per browser session so every turn lands on one call log rather
     # than creating a fresh "call" for each message.
     session_id: Optional[str] = None
@@ -21,16 +40,18 @@ async def _resolve_business(request: Request, session) -> str:
     """Attribute the conversation to the signed-in user's business, if any."""
     from services.call_logger import get_or_create_demo_business
 
-    auth = request.headers.get("Authorization", "")
-    if auth.startswith("Bearer "):
+    from api.routes.auth import session_token
+
+    token = session_token(request)
+    if token:
         try:
             from scripts.config import settings
             from services.auth import decode_token, get_user_by_id
 
-            payload = decode_token(auth[7:], settings.JWT_SECRET_KEY, settings.JWT_ALGORITHM)
+            payload = decode_token(token, settings.JWT_SECRET_KEY, settings.JWT_ALGORITHM)
             if payload and payload.get("type") == "access":
                 user = await get_user_by_id(session, payload["sub"])
-                if user and user.business_id:
+                if user and user.is_active and user.business_id:
                     return user.business_id
         except Exception as e:
             logger.debug("Could not attribute chat to a user: %s", e)
@@ -39,56 +60,41 @@ async def _resolve_business(request: Request, session) -> str:
 
 
 @router.post("/chat")
-async def chat(request: Request, body: ChatRequest):
-    from llm_agent.agent import get_llm_agent
-    from services.call_logger import record_turn
-    from services.conversation_manager import ConversationState
+async def chat(request: Request, body: ChatRequest, session=Depends(get_db)):
+    from services.call_logger import find_call
+    from services.call_session import run_turn
 
-    db_manager = getattr(request.app.state, "db_manager", None)
-    if not db_manager:
-        return {"response": "Backend is starting up. Please try again in a moment."}
+    message = body.message.strip()[:MAX_MESSAGE_CHARS]
+    business_id = await _resolve_business(request, session)
 
-    session_id = body.session_id or f"web_{uuid.uuid4().hex[:12]}"
-    agent = get_llm_agent(db_manager)
+    # Continue the client's session only if it is well-formed and belongs to
+    # this business; otherwise start a new one. A guessed or reused id must
+    # never append to someone else's conversation.
+    session_id = body.session_id if body.session_id and _SESSION_RE.match(body.session_id) else None
+    if session_id:
+        existing = await find_call(session, session_id)
+        if existing is not None and existing.business_id != business_id:
+            session_id = None
+    session_id = session_id or f"web_{uuid.uuid4().hex[:16]}"
 
-    session = await db_manager.get_session()
-    try:
-        business_id = await _resolve_business(request, session)
-
-        conv = ConversationState(business_id, session_id)
-        for turn in body.conversation_history:
-            if turn.get("role") == "user":
-                conv.add_turn("caller", turn["content"])
-            else:
-                conv.add_turn("agent", turn["content"])
-
-        result = await agent.process_turn(conv, session, body.message)
-
-        transcript = [
+    result = await run_turn(session, business_id, session_id, message, channel="web")
+    return {
+        "response": result.reply,
+        "session_id": session_id,
+        "source": result.source,
+        "end": result.end_call,
+        # What actually happened, not what the reply claims: the browser can
+        # show a confirmation card only when a row was really written.
+        "booked": [
             {
-                "speaker": t.get("speaker"),
-                "text": t.get("text"),
-                "timestamp": t["timestamp"].isoformat() if t.get("timestamp") else None,
+                "appointment_id": appt.id,
+                "service": appt.service.name,
+                "starts_at": appt.start.isoformat(),
+                "reference": appt.id[:6].upper(),
             }
-            for t in conv.turns
-        ]
-        intent = result.get("intent")
-        await record_turn(
-            session,
-            session_id=session_id,
-            business_id=business_id,
-            transcript=transcript,
-            intent_name=getattr(intent, "name", None) or (intent if isinstance(intent, str) else None),
-            escalated=bool(result.get("escalated") or conv.escalation_requested),
-        )
-
-        return {
-            "response": result["response"],
-            "session_id": session_id,
-            "source": result.get("source", "rules"),
-        }
-    finally:
-        await session.close()
+            for appt in result.booked
+        ],
+    }
 
 
 @router.get("/conversations")

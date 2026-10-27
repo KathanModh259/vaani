@@ -1,0 +1,22 @@
+# Line endings are part of the build here, not a preference.
+#
+# This project is developed on Windows and deployed from Linux. A carriage
+# return inside a GitHub Actions `run:` block is a shell syntax error
+# (`$'\r'`), and a CRLF Dockerfile can break `\` continuations. Forcing LF in
+# the working tree means what the developer sees is what the runner executes.
+#
+# Binary assets keep their bytes untouched.
+* text=auto eol=lf
+
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.webp binary
+*.ico binary
+*.onnx binary
+*.woff binary
+*.woff2 binary
+*.ttf binary
+*.mp3 binary
+*.wav binary
+*.db binary

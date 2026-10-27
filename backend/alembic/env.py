@@ -18,15 +18,22 @@ from db import Base
 # this is the Alembic Config object
 config = context.config
 
-# Interpret the config file for Python logging
-if config.config_file_name is not None:
+# Interpret the config file for Python logging - but only from the CLI. When
+# the app migrates itself at boot (db.migrate), fileConfig would disable every
+# logger the app already configured and silence it for the process lifetime.
+if config.config_file_name is not None and config.attributes.get("configure_logger", True):
     fileConfig(config.config_file_name)
 
-# Set the database URL from settings
-config.set_main_option("sqlalchemy.url", settings.DATABASE_URL)
+# Set the database URL from settings unless the caller pinned one (tests).
+if not config.attributes.get("url_pinned"):
+    config.set_main_option("sqlalchemy.url", settings.DATABASE_URL)
 
 # target_metadata for autogenerate
 target_metadata = Base.metadata
+
+
+def _is_sqlite(url: str) -> bool:
+    return url.startswith("sqlite")
 
 
 def run_migrations_offline() -> None:
@@ -38,7 +45,7 @@ def run_migrations_offline() -> None:
         literal_binds=True,
         dialect_opts={"paramstyle": "named"},
         compare_type=True,
-        compare_server_default=True,
+        render_as_batch=_is_sqlite(url),
     )
 
     with context.begin_transaction():
@@ -51,7 +58,9 @@ def do_run_migrations(connection: Connection) -> None:
         connection=connection,
         target_metadata=target_metadata,
         compare_type=True,
-        compare_server_default=True,
+        # SQLite cannot ALTER most things in place; batch mode rebuilds the
+        # table instead. A no-op on Postgres.
+        render_as_batch=connection.dialect.name == "sqlite",
     )
 
     with context.begin_transaction():

@@ -16,6 +16,13 @@ backend/models/
 # Test/dev artifacts
 .pytest_cache/
 tests/
+
+# Not part of the runtime image: the MCP server runs on the host, the docs and
+# the deployment files are read from the repository.
+docs/
+deploy/
+mcp/
+skills/
 alembic/versions/__pycache__/
 
 # NOTE: frontend/ must NOT be ignored - app.py serves the landing page and

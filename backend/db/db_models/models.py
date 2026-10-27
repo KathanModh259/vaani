@@ -1,7 +1,8 @@
 from typing import Optional, Dict, Any, List
 from enum import Enum
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 from datetime import datetime, date, timezone
+import re
 import uuid
 
 class BusinessStatus(str, Enum):
@@ -121,6 +122,12 @@ class User(BaseDBModel):
     is_verified: bool = False
 
 
+# Deliberately permissive but not absent: enough to reject "notanemail" and
+# a one-character password, without inventing rules that lock out real users.
+_EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s.]+(\.[^@\s.]+)+$")
+MIN_PASSWORD_LENGTH = 8
+
+
 class UserCreate(BaseModel):
     email: str
     password: str
@@ -128,10 +135,78 @@ class UserCreate(BaseModel):
     phone: Optional[str] = None
     business_name: Optional[str] = None
 
+    @field_validator("email")
+    @classmethod
+    def _valid_email(cls, v: str) -> str:
+        v = (v or "").strip().lower()
+        if not _EMAIL_RE.match(v):
+            raise ValueError("Enter a valid email address")
+        return v
+
+    @field_validator("password")
+    @classmethod
+    def _strong_enough(cls, v: str) -> str:
+        if len(v or "") < MIN_PASSWORD_LENGTH:
+            raise ValueError(f"Password must be at least {MIN_PASSWORD_LENGTH} characters")
+        return v
+
+    @field_validator("full_name")
+    @classmethod
+    def _has_name(cls, v: str) -> str:
+        v = (v or "").strip()
+        if not v:
+            raise ValueError("Name is required")
+        return v
+
+
+def check_password_strength(v: str) -> str:
+    if len(v or "") < MIN_PASSWORD_LENGTH:
+        raise ValueError(f"Password must be at least {MIN_PASSWORD_LENGTH} characters")
+    return v
+
+
+class RefreshRequest(BaseModel):
+    refresh_token: str
+
+
+class ForgotPasswordRequest(BaseModel):
+    email: str
+
+    @field_validator("email")
+    @classmethod
+    def _normalise(cls, v: str) -> str:
+        return (v or "").strip().lower()
+
+
+class ResetPasswordRequest(BaseModel):
+    token: str
+    password: str
+
+    @field_validator("password")
+    @classmethod
+    def _strong_enough(cls, v: str) -> str:
+        return check_password_strength(v)
+
+
+class ChangePasswordRequest(BaseModel):
+    current_password: str
+    new_password: str
+
+    @field_validator("new_password")
+    @classmethod
+    def _strong_enough(cls, v: str) -> str:
+        return check_password_strength(v)
+
 
 class UserLogin(BaseModel):
     email: str
     password: str
+
+    @field_validator("email")
+    @classmethod
+    def _normalise(cls, v: str) -> str:
+        # Registration lower-cases; login must match or the lookup misses.
+        return (v or "").strip().lower()
 
 
 class UserResponse(BaseModel):
@@ -148,6 +223,9 @@ class UserResponse(BaseModel):
 
 class TokenResponse(BaseModel):
     access_token: str
+    # Long-lived; trade it at /api/auth/refresh for a new pair when the
+    # access token expires, instead of signing the owner out every hour.
+    refresh_token: Optional[str] = None
     token_type: str = "bearer"
     user: UserResponse
 

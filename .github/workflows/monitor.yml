@@ -1,0 +1,51 @@
+name: Monitor
+
+# Hourly synthetic conversation against production, and a weekly run of the
+# real-model caller evals. Both are skipped until configured:
+#   Settings -> Variables:  PROD_URL = https://vaani.yourdomain.com
+#   Settings -> Secrets:    OPENROUTER_API_KEY (evals only; any provider key works)
+# A failing run emails the repository's watchers.
+
+on:
+  schedule:
+    - cron: "17 * * * *"      # synthetic check, hourly
+    - cron: "40 3 * * 1"      # evals, Mondays 09:10 IST
+  workflow_dispatch:
+
+jobs:
+  synthetic:
+    if: vars.PROD_URL != '' && (github.event_name == 'workflow_dispatch' || github.event.schedule == '17 * * * *')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Talk to production
+        working-directory: backend
+        run: python -m scripts.synthetic_check "${{ vars.PROD_URL }}"
+
+  evals:
+    if: github.event_name == 'workflow_dispatch' || github.event.schedule == '40 3 * * 1'
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+      - run: pip install -r requirements.txt
+      - name: Caller evals against the real model
+        env:
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+          LLM_PROVIDER: auto
+        run: |
+          # Any provider from llm_agent/providers.py works; the evals print
+          # which one answered and whether its weights are open.
+          if [ -z "$OPENROUTER_API_KEY" ] && [ -z "$OPENAI_API_KEY" ]; then
+            echo "No model key secret set - skipping the evals"; exit 0
+          fi
+          python -m evals.run

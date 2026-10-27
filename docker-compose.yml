@@ -1,3 +1,22 @@
+# Production stack: API + Postgres + Redis + Caddy (TLS) + nightly backups.
+#
+#   1. cp backend/.env.example backend/.env      # then fill in the secrets
+#      (or: python -m scripts.init_env --write)
+#   2. export POSTGRES_PASSWORD=... JWT_SECRET_KEY=... ENCRYPTION_KEY=...
+#      PUBLIC_BASE_URL=https://vaani.example.com DOMAIN=vaani.example.com
+#   3. docker compose up -d --build
+#   4. python -m scripts.preflight https://vaani.example.com
+#
+# Only Caddy is published to the internet. Everything else is reachable only
+# on the compose network, so the database is never exposed and X-Forwarded-For
+# cannot be forged from outside.
+
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
 services:
   api:
     build:
@@ -7,16 +26,28 @@ services:
         # 1 = bake the free Piper/Whisper engines into the image (+~175MB).
         # 0 = smaller image; mount piper_models below instead.
         WITH_SPEECH: "${WITH_SPEECH:-0}"
+    # Loopback only: Caddy is the one public entry point. Exposing 8000
+    # directly would bypass TLS and let clients forge X-Forwarded-For past the
+    # rate limiter.
     ports:
-      - "8000:8000"
+      - "127.0.0.1:8000:8000"
     env_file:
-      - backend/.env
+      - ${API_ENV_FILE:-backend/.env}
     environment:
       ENVIRONMENT: production
       DATABASE_URL: postgresql+asyncpg://vaani:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}@db:5432/vaani
       # Must be set - the app refuses to boot in production without it.
       JWT_SECRET_KEY: ${JWT_SECRET_KEY:?generate one - see DEPLOYMENT.md}
+      # Encrypts call transcripts. Losing it loses every transcript - back it up.
+      ENCRYPTION_KEY: ${ENCRYPTION_KEY:?generate one - see DEPLOYMENT.md}
+      # The https origin Twilio calls; required to verify webhook signatures.
+      PUBLIC_BASE_URL: ${PUBLIC_BASE_URL:?e.g. https://vaani.yourdomain.com}
       CORS_ORIGINS: ${CORS_ORIGINS:-https://example.com}
+      # Rate limits shared across replicas (the service below).
+      REDIS_URL: redis://redis:6379/0
+      # One replica runs the migrations. With more than one, set this to false
+      # and run `docker compose exec api python -m db.migrate` per deploy.
+      AUTO_MIGRATE: ${AUTO_MIGRATE:-true}
     volumes:
       # Persist downloaded voice models across rebuilds.
       - piper_models:/app/backend/models/piper
@@ -25,6 +56,43 @@ services:
     depends_on:
       db:
         condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://localhost:8000/health/ready || exit 1"]
+      interval: 15s
+      timeout: 5s
+      # Migrations and the first model load take a while on a cold start.
+      start_period: 45s
+      retries: 5
+    # Long enough for an in-flight call to finish and the transcript to be
+    # written before the container is killed.
+    stop_grace_period: 30s
+    logging: *default-logging
+    restart: unless-stopped
+
+  # The only public entry point. Caddy obtains and renews the TLS certificate
+  # itself; nothing else needs a certificate.
+  caddy:
+    image: caddy:2-alpine
+    environment:
+      # The domain to serve. ":80" serves plain HTTP, which is what a local
+      # stack test wants; a real domain gets automatic HTTPS.
+      DOMAIN: ${DOMAIN:-:80}
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    volumes:
+      - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
+      # Certificate state must survive a restart, or the rate limits on
+      # Let's Encrypt get hit and the certificate is not issued.
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      api:
+        condition: service_healthy
+    logging: *default-logging
     restart: unless-stopped
 
   db:
@@ -43,15 +111,58 @@ services:
       interval: 5s
       timeout: 5s
       retries: 5
+    stop_grace_period: 30s
+    logging: *default-logging
     restart: unless-stopped
 
   redis:
     image: redis:7-alpine
+    # Loopback only. Rate-limit counters, nothing worth a password - but the
+    # port is not reachable from outside either way.
     ports:
       - "127.0.0.1:6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+    logging: *default-logging
+    restart: unless-stopped
+
+  # Daily pg_dump into ./backups, keeping BACKUP_KEEP_DAYS (default 14).
+  # This is the first line of defence, not the last: copy ./backups off the
+  # machine (object storage, another region), and keep ENCRYPTION_KEY out of
+  # those copies - it must be restorable separately. Restore with:
+  #   docker compose exec -T db pg_restore -U vaani -d vaani --clean < backups/<file>.dump
+  backup:
+    image: postgres:16-alpine
+    environment:
+      PGPASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
+      BACKUP_KEEP_DAYS: ${BACKUP_KEEP_DAYS:-14}
+    volumes:
+      - ./backups:/backups
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        while true; do
+          f=/backups/vaani-$$(date +%Y%m%d-%H%M%S).dump
+          if pg_dump -h db -U vaani -Fc vaani > "$$f.tmp"; then
+            mv "$$f.tmp" "$$f" && echo "backup ok: $$f"
+          else
+            rm -f "$$f.tmp"; echo "BACKUP FAILED" >&2
+          fi
+          find /backups -name 'vaani-*.dump' -mtime +$$BACKUP_KEEP_DAYS -delete
+          sleep 86400
+        done
+    depends_on:
+      db:
+        condition: service_healthy
+    logging: *default-logging
     restart: unless-stopped
 
 volumes:
   postgres_data:
   piper_models:
   hf_cache:
+  caddy_data:
+  caddy_config:

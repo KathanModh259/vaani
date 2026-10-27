@@ -1,11 +1,30 @@
-import asyncio
-import json
-import logging
-from typing import Optional, Dict, Any, List
-from abc import ABC, abstractmethod
-from enum import Enum
+"""The receptionist: one caller utterance in, one reply (and its effects) out.
 
-from services.conversation_manager import ConversationState, ConversationManager
+Three answer paths, in order of preference:
+
+  1. an open-weight model, driving the tools in llm_agent/tools.py;
+  2. the deterministic booking flow (llm_agent/booking_flow.py), which slots
+     fills a booking with plain parsing and calls the same tools - so a
+     deployment with no model key still books real appointments;
+  3. the keyword rules engine below, which answers FAQs from the owner's own
+     profile and hands anything else to a human.
+
+Paths 2 and 3 never claim a booking a tool did not commit.
+
+Nothing here reads or writes the call log; services/call_session.py owns the
+turn lifecycle (load history, run this, persist the result).
+"""
+
+import logging
+import re
+from dataclasses import dataclass, field
+from enum import Enum
+from typing import Any, Dict, List, Optional
+
+from llm_agent import booking_flow, llm_provider
+from llm_agent.tools import TOOL_SPECS, TurnContext, dispatch
+from services.booking import BookedAppointment
+from services.business_profile import BusinessProfile
 
 logger = logging.getLogger(__name__)
 
@@ -20,525 +39,228 @@ class Intent(str, Enum):
     UNKNOWN = "unknown"
 
 
-class ActionResponse:
-    """Represents a response from an action."""
-
-    def __init__(self, success: bool, message: str, action_type: Optional[str] = None,
-                 booking_id: Optional[str] = None, details: Optional[Dict[str, Any]] = None):
-        self.success = success
-        self.message = message
-        self.action_type = action_type
-        self.booking_id = booking_id
-        self.details = details or {}
-
-
-class ActionResult:
-    """Base class for action results."""
-
-    def __init__(self, success: bool, response: str, details: Optional[Dict[str, Any]] = None):
-        self.success = success
-        self.response = response
-        self.details = details or {}
+@dataclass
+class TurnResult:
+    reply: str
+    source: str                       # "llm" | "rules"
+    outcome: str                      # call_outcome enum value
+    escalated: bool = False
+    transfer_to: Optional[str] = None
+    end_call: bool = False
+    events: List[str] = field(default_factory=list)
+    booked: List[BookedAppointment] = field(default_factory=list)
+    # Set when the caller was promised a callback (escalated, not transferred).
+    callback_reason: Optional[str] = None
 
 
-class BookingActionResult(ActionResult):
-    """Result for booking-related actions."""
+# An ordered list, not a dict: the first match wins, so priority is the whole
+# point and the same intent can appear at two priorities. With BOOK first,
+# "reschedule my appointment" matched on "appointment" and "cancel my
+# booking" on "book", so neither reschedule nor cancel could ever fire.
+_INTENT_PATTERNS = [
+    # An explicit request for a human outranks everything - a frustrated
+    # caller must never be routed into booking because they said "appointment".
+    (Intent.ESCALATE_TO_HUMAN, [
+        "human", "agent", "representative", "transfer", "escalate",
+        "talk to", "speak to", "speak with", "real person", "someone else",
+        "manager", "supervisor",
+    ]),
+    # Questions *about* a policy come before the action they name, or
+    # "what's your cancellation policy" starts cancelling a booking.
+    (Intent.ANSWER_FAQ, ["policy", "refund", "do you take", "do you accept", "how do i pay",
+                         "what do you charge", "insurance"]),
+    (Intent.CANCEL_APPOINTMENT, ["cancel", "call it off", "don't need it", "dont need it"]),
+    (Intent.RESCHEDULE_APPOINTMENT, ["reschedule", "postpone", "move my", "move the",
+                                     "change my", "change the", "shift my", "different time"]),
+    (Intent.CHECK_AVAILABILITY, ["available", "availability", "free", "slots",
+                                 "open on", "are you open", "opening"]),
+    (Intent.BOOK_APPOINTMENT, ["book", "schedule", "reserve", "appointment", "come in"]),
+    (Intent.ANSWER_FAQ, ["hours", "how much", "price", "cost", "when", "what time",
+                         "payment", "faq", "card", "cash", "upi", "open", "where", "address"]),
+]
 
-    def __init__(self, success: bool, response: str, booking_id: Optional[str] = None,
-                 details: Optional[Dict[str, Any]] = None):
-        super().__init__(success, response, details)
-        self.booking_id = booking_id
-
-
-class LLMAction(ABC):
-    """Abstract base class for LLM actions."""
-
-    @abstractmethod
-    def get_action_schema(self) -> Dict[str, Any]:
-        """Get the JSON schema for the action."""
-        pass
-
-    @abstractmethod
-    async def execute(self, conversation: ConversationState, db_session, business_id: str, **kwargs) -> ActionResponse:
-        """Execute the action.
-
-        Args:
-            conversation: The current conversation state
-            db_session: Database session for persistence
-            business_id: ID of the business being called
-            **kwargs: Additional implementation-specific arguments
-
-        Returns:
-            ActionResponse with result details
-        """
-        pass
+GREETINGS = ("hello", "hi", "hey", "namaste", "namaskar", "good morning",
+             "good afternoon", "good evening", "how are you", "are you there")
+COURTESIES = ("thank", "thanks", "shukriya", "dhanyavad", "bye", "goodbye", "that's all", "thats all")
 
 
-class CheckAvailabilityAction(LLMAction):
-    """Action to check appointment availability."""
+def extract_intent(text: str) -> Intent:
+    t = (text or "").lower()
+    for intent, patterns in _INTENT_PATTERNS:
+        if any(p in t for p in patterns):
+            return intent
+    return Intent.UNKNOWN
 
-    def get_action_schema(self) -> Dict[str, Any]:
-        return {
-            "name": "check_availability",
-            "description": "Check availability for a service on a specific date and time",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "date": {
-                        "type": "string",
-                        "description": "Date in YYYY-MM-DD format"
-                    },
-                    "time": {
-                        "type": "string",
-                        "description": "Time in 24-hour HH:MM format"
-                    },
-                    "service_name": {
-                        "type": "string",
-                        "description": "Name of the service"
-                    }
-                },
-                "required": ["date", "time", "service_name"]
-            }
-        }
 
-    async def execute(self, conversation: ConversationState, db_session, business_id: str) -> ActionResponse:
-        """Check availability for a service."""
-        return ActionResponse(
-            success=True,
-            message="Checking availability...",
-            action_type="check_availability",
-            details={
-                "available_slots": ["10:00", "11:00", "14:00"],
-                "next_available": "10:00",
-            }
+# Filler that appears in every question. Without this, "what are your hours"
+# matches the FAQ "What is your cancellation policy?" on {what, your}.
+_STOPWORDS = {
+    "the", "and", "you", "your", "are", "what", "how", "can", "for", "have", "has", "there",
+    "any", "with", "does", "this", "that", "from", "when", "where", "will", "would", "which",
+    "who", "why", "about", "get", "much", "many", "please", "tell", "need", "want", "like",
+    "our", "was", "were", "been", "they", "them", "its", "also", "just", "some", "near", "nearby",
+}
+
+
+def _words(s: str) -> set:
+    return {w for w in re.findall(r"[a-z0-9ऀ-ॿ઀-૿]+", s.lower())
+            if len(w) > 2 and w not in _STOPWORDS}
+
+
+def _best_faq(profile: BusinessProfile, question: str) -> Optional[str]:
+    """Owner's FAQ whose question shares the most words with the caller's."""
+    asked = _words(question)
+    best, score = None, 0
+    for q, a in profile.faqs:
+        overlap = len(asked & _words(q))
+        if overlap > score:
+            best, score = a, overlap
+    return best if score >= 1 else None
+
+
+class ReceptionistAgent:
+    async def handle_turn(
+        self,
+        session,
+        profile: BusinessProfile,
+        history: List[Dict[str, Any]],
+        user_text: str,
+        channel: str = "phone",
+        caller_phone: Optional[str] = None,
+        call_log_id: Optional[str] = None,
+    ) -> TurnResult:
+        ctx = TurnContext(session=session, profile=profile, channel=channel,
+                          caller_phone=caller_phone, call_log_id=call_log_id)
+
+        reply, source = None, "rules"
+        if llm_provider.is_configured():
+            earlier_booking = any(t.get("speaker") == "event" and str(t.get("text", "")).startswith(("Booked", "Rescheduled"))
+                                  for t in history)
+            messages = llm_provider.build_messages(
+                history, user_text, profile.name, profile.prompt_context(),
+                channel=channel, caller_phone=caller_phone,
+            )
+            reply = await llm_provider.run_agent(
+                messages, TOOL_SPECS,
+                dispatch=lambda name, args: dispatch(ctx, name, args),
+                booking_made=lambda: earlier_booking or bool(ctx.booked),
+            )
+            if reply:
+                source = "llm"
+
+        if not reply:
+            # A tool already did something real this turn (booked, then the
+            # provider timed out on the follow-up). Say what actually
+            # happened rather than restarting the conversation.
+            reply = self._reply_for_effects(ctx)
+        if not reply:
+            # No model. Try the deterministic booking dialogue: it is the only
+            # path that can turn "tomorrow at 4" into a real row without a
+            # provider, and it declines politely when the turn is not about
+            # booking.
+            intent = extract_intent(user_text)
+            reply = await booking_flow.get_flow().maybe_handle(ctx, user_text, intent)
+        if not reply:
+            reply = await self._rules_reply(ctx, history, user_text)
+
+        return TurnResult(
+            reply=reply,
+            source=source,
+            outcome=self._outcome(ctx),
+            escalated=ctx.escalated,
+            transfer_to=ctx.transfer_to,
+            end_call=ctx.end_call,
+            events=list(ctx.events),
+            booked=list(ctx.booked),
+            callback_reason=(ctx.escalation_reason or "caller asked to be called back")
+            if ctx.escalated and not ctx.transfer_to else None,
         )
 
+    @staticmethod
+    def _outcome(ctx: TurnContext) -> str:
+        if ctx.transfer_to:
+            return "transferred"
+        if ctx.booked:
+            return "booked"
+        if ctx.escalated:
+            return "escalated"
+        return "completed_faq"
 
-class BookAppointmentAction(LLMAction):
-    """Action to book an appointment."""
+    @staticmethod
+    def _reply_for_effects(ctx: TurnContext) -> Optional[str]:
+        if ctx.booked:
+            b = ctx.booked[-1]
+            when = b.start.strftime("%A %d %B at %I:%M %p").replace(" 0", " ")
+            return f"You're booked for {b.service.name} on {when}. Is there anything else?"
+        if ctx.transfer_to:
+            return "Let me connect you to a member of the team now."
+        if ctx.escalated:
+            return "I'll ask a member of the team to call you back as soon as possible."
+        return None
 
-    def get_action_schema(self) -> Dict[str, Any]:
-        return {
-            "name": "book_appointment",
-            "description": "Book an appointment for a customer",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "customer_name": {
-                        "type": "string",
-                        "description": "Name of the customer"
-                    },
-                    "customer_phone": {
-                        "type": "string",
-                        "description": "Customer's phone number"
-                    },
-                    "service_name": {
-                        "type": "string",
-                        "description": "Name of the service to book"
-                    },
-                    "date": {
-                        "type": "string",
-                        "description": "Date in YYYY-MM-DD format"
-                    },
-                    "time": {
-                        "type": "string",
-                        "description": "Time in 24-hour HH:MM format"
-                    }
-                },
-                "required": ["customer_name", "customer_phone", "service_name", "date", "time"]
-            }
-        }
+    # ------------------------------------------------------------ rules path
 
-    async def execute(self, conversation: ConversationState, db_session, business_id: str) -> ActionResponse:
-        """Book an appointment with concurrency safety."""
-        booking_id = f"booking_{asyncio.get_event_loop().time()}"
+    async def _rules_reply(self, ctx: TurnContext, history: List[Dict[str, Any]], text: str) -> str:
+        p = ctx.profile
+        t = (text or "").lower().strip()
+        intent = extract_intent(t)
 
-        return ActionResponse(
-            success=True,
-            message="Appointment booked successfully!",
-            action_type="book_appointment",
-            booking_id=booking_id,
-            details={
-                "booking_id": booking_id,
-                "service": "general consultation",
-                "date_time": "2026-07-21 10:00",
-                "confirmed": True,
-            }
-        )
-
-
-class RescheduleAction(LLMAction):
-    """Action to reschedule an appointment."""
-
-    def get_action_schema(self) -> Dict[str, Any]:
-        return {
-            "name": "reschedule_appointment",
-            "description": "Reschedule an existing appointment",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "appointment_id": {
-                        "type": "string",
-                        "description": "ID of the appointment to reschedule"
-                    },
-                    "new_date": {
-                        "type": "string",
-                        "description": "New date in YYYY-MM-DD format"
-                    },
-                    "new_time": {
-                        "type": "string",
-                        "description": "New time in 24-hour HH:MM format"
-                    }
-                },
-                "required": ["appointment_id", "new_date", "new_time"]
-            }
-        }
-
-    async def execute(self, conversation: ConversationState, db_session, business_id: str) -> ActionResponse:
-        """Reschedule an appointment."""
-        return ActionResponse(
-            success=True,
-            message="Appointment rescheduled successfully!",
-            action_type="reschedule_appointment",
-            booking_id="updated_appointment_id"
-        )
-
-
-class CancelAction(LLMAction):
-    """Action to cancel an appointment."""
-
-    def get_action_schema(self) -> Dict[str, Any]:
-        return {
-            "name": "cancel_appointment",
-            "description": "Cancel an existing appointment",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "appointment_id": {
-                        "type": "string",
-                        "description": "ID of the appointment to cancel"
-                    },
-                    "reason": {
-                        "type": "string",
-                        "description": "Reason for cancellation"
-                    }
-                },
-                "required": ["appointment_id"]
-            }
-        }
-
-    async def execute(self, conversation: ConversationState, db_session, business_id: str) -> ActionResponse:
-        """Cancel an appointment."""
-        return ActionResponse(
-            success=True,
-            message="Appointment cancelled successfully!",
-            action_type="cancel_appointment",
-            booking_id="cancelled_appointment_id"
-        )
-
-
-class AnswerFAQAction(LLMAction):
-    """Action to answer FAQs."""
-
-    def get_action_schema(self) -> Dict[str, Any]:
-        return {
-            "name": "get_faq_answer",
-            "description": "Get answer to frequently asked question",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "query": {
-                        "type": "string",
-                        "description": "The FAQ question or topic"
-                    }
-                },
-                "required": ["query"]
-            }
-        }
-
-    async def execute(self, conversation: ConversationState, db_session, business_id: str) -> ActionResponse:
-        """Answer a FAQ question."""
-        return ActionResponse(
-            success=True,
-            message="Based on our FAQ, our business hours are 9 AM to 5 PM, Monday to Friday.\nYou can pay by credit card or cash at the time of service.\nFor refunds, we offer a 24-hour cancellation policy.",
-            action_type="answer_faq"
-        )
-
-
-class EscalationAction(LLMAction):
-    """Action to escalate to human support."""
-
-    def get_action_schema(self) -> Dict[str, Any]:
-        return {
-            "name": "escalate_to_human",
-            "description": "Escalate the call to human support",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "reason": {
-                        "type": "string",
-                        "description": "Reason for escalation"
-                    }
-                },
-                "required": ["reason"]
-            }
-        }
-
-    async def execute(self, conversation: ConversationState, db_session, business_id: str) -> ActionResponse:
-        """Escalate to human support."""
-        return ActionResponse(
-            success=True,
-            message="I'm transferring you to a human agent. Please hold for a moment.",
-            action_type="escalate_to_human",
-            details={
-                "estimated_wait_time": "2-3 minutes",
-                "will_transfer": True,
-            }
-        )
-
-
-class LLMAgent:
-    """AI agent for handling calls with LLM integration."""
-
-    def __init__(self, db_manager):
-        self.db_manager = db_manager
-        self.actions = {
-            Intent.BOOK_APPOINTMENT: BookAppointmentAction(),
-            Intent.RESCHEDULE_APPOINTMENT: RescheduleAction(),
-            Intent.CANCEL_APPOINTMENT: CancelAction(),
-            Intent.CHECK_AVAILABILITY: CheckAvailabilityAction(),
-            Intent.ANSWER_FAQ: AnswerFAQAction(),
-            Intent.ESCALATE_TO_HUMAN: EscalationAction(),
-        }
-        self.available_intents = list(self.actions.keys())
-        self.conversation_manager = ConversationManager()
-
-    async def initialize(self):
-        """Initialize the LLM agent."""
-        logger.info("LLM Agent initialized")
-
-    async def cleanup(self):
-        """Clean up the LLM agent."""
-        logger.info("LLM Agent cleaned up")
-
-    def _extract_intent(self, text: str, conversation: ConversationState) -> Intent:
-        """Extract intent from text.
-
-        In a real implementation, this would use an LLM for intent detection.
-        For now, use simple pattern matching.
-        """
-        text_lower = text.lower()
-
-        intent_patterns = {
-            Intent.BOOK_APPOINTMENT: ["book", "schedule", "make", "reserve", "appointment"],
-            Intent.RESCHEDULE_APPOINTMENT: ["reschedule", "move", "change", "modify"],
-            Intent.CANCEL_APPOINTMENT: ["cancel", "remove", "delete", "stop"],
-            Intent.CHECK_AVAILABILITY: ["available", "availability", "free", "slots"],
-            Intent.ANSWER_FAQ: ["hours", "how much", "price", "cost", "when", "what time", "payment", "faq"],
-            Intent.ESCALATE_TO_HUMAN: ["human", "agent", "representative", "transfer", "escalate", "talk to"],
-        }
-
-        for intent, patterns in intent_patterns.items():
-            for pattern in patterns:
-                if pattern in text_lower:
-                    return intent
-
-        return Intent.UNKNOWN
-
-    def _verify_booking(self, booking_id: str, db_session, business_id: str) -> bool:
-        """Verify that a booking actually exists in the database.
-
-        Critical: Always verify before confirming to prevent hallucination.
-        """
-        return True
-
-    async def _generate_response(self, conversation: ConversationState, user_text: str) -> Dict[str, Any]:
-        """Generate response using LLM with function calling.
-
-        This is a simplified version - in production, would use OpenAI/Anthropic API
-        """
-        intent = self._extract_intent(user_text, conversation)
-        confidence = 0.8
+        # The owner's own answers beat keyword routing - "is there parking?"
+        # matches no intent but is exactly what their FAQ covers. Actions
+        # (book/cancel/escalate) still win: "cancel my appointment" must not
+        # be answered with the cancellation-policy FAQ.
+        if intent not in (Intent.ESCALATE_TO_HUMAN, Intent.BOOK_APPOINTMENT,
+                          Intent.RESCHEDULE_APPOINTMENT, Intent.CANCEL_APPOINTMENT):
+            faq = _best_faq(p, t)
+            if faq:
+                return faq
 
         if intent == Intent.UNKNOWN:
-            if len(user_text.split()) < 3:
-                return {
-                    'response': 'I\'m not sure I understood. Could you please clarify what you\'re looking for?',
-                    'intent': None,
-                    'confidence': 0.0,
-                    'needs_clarification': True,
-                    'action_required': False,
-                }
+            if any(c in t for c in COURTESIES):
+                ctx.end_call = True
+                return "You're very welcome. Thanks for calling, and have a lovely day."
+            if any(g in t for g in GREETINGS):
+                return (f"Hello, thanks for calling {p.name}. I can tell you about our services "
+                        "and hours, or take a message for the team. What can I do for you?")
+            # Two misunderstandings in a row: stop looping, get a person.
+            misses = sum(1 for turn in history[-4:] if turn.get("speaker") == "agent"
+                         and "didn't catch" in str(turn.get("text", "")))
+            if misses >= 1:
+                await dispatch(ctx, "transfer_to_human", {"reason": "could not understand the caller"})
+                return self._reply_for_effects(ctx) or "Let me get someone from the team to help you."
+            return "Sorry, I didn't catch that. Could you say it another way?"
 
-            return {
-                'response': 'I\'m sorry, I didn\'t understand. Could you please rephrase?',
-                'intent': None,
-                'confidence': 0.0,
-                'needs_clarification': True,
-                'action_required': False,
-            }
+        if intent == Intent.ESCALATE_TO_HUMAN:
+            await dispatch(ctx, "transfer_to_human", {"reason": "caller asked for a person"})
+            return self._reply_for_effects(ctx) or "Let me get someone from the team to help you."
 
-        action = self.actions.get(intent)
+        if intent in (Intent.BOOK_APPOINTMENT, Intent.RESCHEDULE_APPOINTMENT, Intent.CANCEL_APPOINTMENT):
+            # Without a model we cannot reliably capture a date, time and name
+            # from free speech, so do not pretend to: ask the team to follow up.
+            what = {Intent.BOOK_APPOINTMENT: "booking", Intent.RESCHEDULE_APPOINTMENT: "reschedule",
+                    Intent.CANCEL_APPOINTMENT: "cancellation"}[intent]
+            await dispatch(ctx, "transfer_to_human", {"reason": f"{what} request: {text[:160]}"})
+            return (self._reply_for_effects(ctx) if ctx.transfer_to else
+                    f"I've noted your {what} request, and a member of the team will call you back "
+                    "to confirm it. Is there anything else?")
 
-        if action is None:
-            return {
-                'response': 'I\'m having trouble processing that request. Can you rephrase?',
-                'intent': intent,
-                'confidence': 1.0,
-                'needs_clarification': True,
-                'action_required': False,
-            }
+        if intent == Intent.CHECK_AVAILABILITY or any(k in t for k in ("hours", "open", "when", "time")):
+            return f"Our hours are {p.hours_summary()} Is there anything else I can help with?"
 
-        if intent == Intent.BOOK_APPOINTMENT:
-            response = "Great! I can help you book an appointment. Could you please tell me:\n1. What service you'd like?\n2. What date works for you?\n3. What time?\n4. Your name and phone number for confirmation."
+        if any(k in t for k in ("how much", "price", "cost", "charge", "fee")):
+            priced = [s for s in p.services if s.price]
+            if priced:
+                items = ", ".join(f"{s.name} is {p.format_price(s.price)}" for s in priced[:3])
+                return f"{items}. Would you like a team member to help you book?"
+            return "I'll have a colleague confirm the price for you. Shall I take your number?"
 
-            return {
-                'response': response,
-                'intent': intent,
-                'confidence': 0.9,
-                'needs_clarification': True,
-                'action_required': True,
-                'action': action,
-            }
-
-        elif intent == Intent.ANSWER_FAQ:
-            response = "Sure! Based on our FAQ: Our business hours are 9 AM to 5 PM, Monday to Friday. You can pay by credit card or cash at the time of service. For refunds, we offer a 24-hour cancellation policy."
-
-            return {
-                'response': response,
-                'intent': intent,
-                'confidence': 0.9,
-                'needs_clarification': False,
-                'action_required': True,
-                'action': action,
-            }
-
-        elif intent == Intent.ESCALATE_TO_HUMAN:
-            response = "I understand you'd like to speak with a human agent. I'm transferring you now. Please hold for a moment."
-
-            return {
-                'response': response,
-                'intent': intent,
-                'confidence': 0.9,
-                'needs_clarification': False,
-                'action_required': True,
-                'action': action,
-            }
-
-        else:
-            return {
-                'response': 'I can help you with that. What specific details would you like me to look up?',
-                'intent': intent,
-                'confidence': 0.8,
-                'needs_clarification': True,
-                'action_required': True,
-                'action': action,
-            }
-
-    async def process_turn(self, conversation: ConversationState, db_session, user_text: str) -> Dict[str, Any]:
-        """Process a turn of conversation.
-
-        Args:
-            conversation: Current conversation state
-            db_session: Database session
-            user_text: Text to process
-
-        Returns:
-            Dict with response and action results
-        """
-        conversation.add_turn('caller', user_text)
-
-        response_data = await self._generate_response(conversation, user_text)
-
-        # Prefer a real LLM reply when one is configured. The rules engine above
-        # still runs first because it decides which action (booking, escalation)
-        # to execute; the LLM only replaces the wording the caller hears, so a
-        # missing or failing API key degrades to the scripted answer rather than
-        # breaking the call.
-        try:
-            from llm_agent import llm_provider
-
-            if llm_provider.is_configured():
-                llm_text = await llm_provider.generate(
-                    turns=conversation.turns,
-                    user_text=user_text,
-                    business_name=getattr(conversation, 'business_name', '') or '',
-                    business_context=conversation.context.get('business_context', ''),
-                )
-                if llm_text:
-                    response_data = dict(response_data)
-                    response_data['response'] = llm_text
-                    response_data['source'] = 'llm'
-        except Exception as e:
-            logger.warning("LLM augmentation skipped: %s", e)
-
-        action_result = None
-        if response_data.get('action_required'):
-            action = response_data.get('action')
-            if action:
-                result = await action.execute(conversation, db_session, conversation.business_id)
-
-                if result.action_type == "book_appointment" and result.success:
-                    if not self._verify_booking(result.booking_id, db_session, conversation.business_id):
-                        result.success = False
-                        result.message = "Booking could not be confirmed. Please try again."
-
-                action_result = {
-                    'success': result.success,
-                    'response': result.message,
-                    'action_type': result.action_type,
-                    'booking_id': result.booking_id,
-                    'details': result.details,
-                }
-
-                intent = response_data.get('intent')
-                if intent:
-                    conversation.update_intent(intent.name, response_data.get('confidence', 0.0))
-
-        agent_response = response_data.get('response', '')
-        conversation.add_turn('agent', agent_response)
-
-        if conversation.should_escalate() and not action_result:
-            escalation_action = self.actions[Intent.ESCALATE_TO_HUMAN]
-            escalation_result = await escalation_action.execute(conversation, db_session, conversation.business_id)
-            agent_response += "\n\n" + escalation_result.message
-
-        intent = response_data.get('intent')
-        return {
-            'response': agent_response,
-            'conversation': conversation,
-            'action': action_result,
-            'escalated': conversation.should_escalate(),
-            # Callers persist this as the call outcome; without it every call
-            # is filed as a generic FAQ answer and bookings never show up.
-            'intent': getattr(intent, 'name', None),
-            'confidence': response_data.get('confidence', 0.0),
-        }
+        if p.about:
+            return (f"{p.about.strip()[:220]} Is there something specific I can help with?")
+        return "I'll have a colleague get back to you on that. Can I take your name and number?"
 
 
-# Global instance
-_llm_agent: Optional[LLMAgent] = None
+_agent = ReceptionistAgent()
 
 
-def get_llm_agent(db_manager) -> LLMAgent:
-    """Get the global LLM agent instance."""
-    global _llm_agent
-    if _llm_agent is None:
-        _llm_agent = LLMAgent(db_manager)
-    return _llm_agent
-
-
-async def initialize_llm_agent(db_manager):
-    """Initialize the global LLM agent."""
-    global _llm_agent
-    if _llm_agent is None:
-        _llm_agent = LLMAgent(db_manager)
-        await _llm_agent.initialize()
-    return _llm_agent
-
-
-async def get_llm_agent_instance(db_manager) -> LLMAgent:
-    """Get or create LLM agent instance."""
-    if _llm_agent is None:
-        _llm_agent = await initialize_llm_agent(db_manager)
-    return _llm_agent
+def get_agent() -> ReceptionistAgent:
+    return _agent

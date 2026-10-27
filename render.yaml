@@ -1,0 +1,50 @@
+# One-container public demo for Render.
+#
+# Connect the repo, set OPENROUTER_API_KEY, deploy. Everything else is wired:
+# a managed Postgres instance, generated secrets, and the port Render injects.
+#
+# Why Postgres and not SQLite: the app refuses to run in production on SQLite
+# (see app.check_production_readiness), because a single container with a
+# file database loses every booking on the next deploy. Render's free Postgres
+# is enough for a judging window; upgrade the plan to keep it alive.
+#
+# Without OPENROUTER_API_KEY the demo still books - the deterministic flow
+# handles English - but multilingual replies need a model.
+databases:
+  - name: vaani-db
+    databaseName: vaani
+    user: vaani
+    plan: free
+
+services:
+  - type: web
+    name: vaani
+    runtime: docker
+    plan: free
+    dockerfilePath: ./Dockerfile
+    healthCheckPath: /health/ready
+    envVars:
+      - key: ENVIRONMENT
+        value: production
+      - key: DEBUG
+        value: "false"
+      - key: JWT_SECRET_KEY
+        generateValue: true
+      - key: ENCRYPTION_KEY
+        generateValue: true
+      # Render hands out postgres:// ; scripts/config.py rewrites the scheme to
+      # postgresql+asyncpg:// so the value can be used unchanged.
+      - key: DATABASE_URL
+        fromDatabase:
+          name: vaani-db
+          property: connectionString
+      - key: CORS_ORIGINS
+        value: https://vaani.onrender.com
+      - key: PUBLIC_BASE_URL
+        value: https://vaani.onrender.com
+      - key: OPENROUTER_API_KEY
+        sync: false
+      - key: LLM_PROVIDER
+        value: openrouter
+      - key: LLM_MODEL
+        value: qwen/qwen3-30b-a3b-instruct-2507

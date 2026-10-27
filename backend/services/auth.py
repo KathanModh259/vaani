@@ -94,6 +94,43 @@ def decode_token(token: str, secret_key: str, algorithm: str = "HS256") -> Optio
         return None
 
 
+def password_fingerprint(password_hash: str) -> str:
+    """Short digest of the current hash. Embedded in reset links so a link
+    stops working the moment the password changes - i.e. it is single-use -
+    without storing reset tokens anywhere."""
+    return hashlib.sha256((password_hash or "").encode()).hexdigest()[:16]
+
+
+def create_purpose_token(user, purpose: str, secret_key: str, algorithm: str = "HS256",
+                         expires_minutes: int = 30) -> str:
+    """A token good for exactly one purpose ("reset" or "verify").
+
+    `type` keeps these from ever being accepted as a session token, and vice
+    versa: get_current_user only accepts type == "access".
+    """
+    now = datetime.now(timezone.utc)
+    payload = {
+        "sub": user.id,
+        "type": purpose,
+        "email": user.email,
+        "fp": password_fingerprint(user.password_hash),
+        "iat": now,
+        "exp": now + timedelta(minutes=expires_minutes),
+    }
+    return jwt.encode(payload, secret_key, algorithm=algorithm)
+
+
+def token_is_current(payload: dict, user) -> bool:
+    """False for tokens issued before the user's last password change, which
+    is what makes "change password" sign every other device out."""
+    changed = getattr(user, "password_changed_at", None)
+    if not changed:
+        return True
+    if changed.tzinfo is None:
+        changed = changed.replace(tzinfo=timezone.utc)
+    return int(payload.get("iat", 0)) >= int(changed.timestamp())
+
+
 def generate_api_key() -> tuple[str, str, str]:
     key = f"vaani_{secrets.token_urlsafe(32)}"
     key_hash = hashlib.sha256(key.encode()).hexdigest()

@@ -1,0 +1,76 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Reset password — Vaani</title>
+<meta name="robots" content="noindex" />
+<link rel="stylesheet" href="/lib/fonts.css" />
+<style>
+  :root{
+    --ink:#000; --paper:#fff; --panel:#0d0d10; --line:rgba(255,255,255,.13); --mute:rgba(255,255,255,.56);
+    --violet:#b9a8ff; --green:#7ee2a8; --red:#f88c8c;
+    --sans:"Instrument Sans", ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+    --serif:"Instrument Serif", Georgia, serif;
+  }
+  *{box-sizing:border-box}
+  body{margin:0; min-height:100vh; display:flex; align-items:center; justify-content:center; padding:24px 16px;
+       background:var(--ink); color:var(--paper); font-family:var(--sans); -webkit-font-smoothing:antialiased}
+  main{width:100%; max-width:400px}
+  .mark{display:block; font-size:14px; letter-spacing:.26em; text-transform:uppercase; color:var(--paper); text-decoration:none; margin-bottom:36px}
+  h1{font-size:40px; font-weight:400; letter-spacing:-.025em; line-height:1.05; margin:0 0 10px}
+  h1 em{font-family:var(--serif); font-style:italic}
+  p{color:var(--mute); line-height:1.55; margin:0 0 26px; font-size:15px}
+  label{display:block; font-size:12px; color:var(--mute); margin-bottom:14px}
+  label span{display:block; margin-bottom:6px}
+  input{width:100%; background:var(--panel); border:1px solid var(--line); color:var(--paper); font:inherit; font-size:15px; padding:12px 14px; border-radius:12px; outline:none}
+  input:focus{border-color:rgba(185,168,255,.6)}
+  button{width:100%; margin-top:8px; padding:13px; border-radius:999px; border:0; background:var(--paper); color:var(--ink); font:inherit; font-size:15px; cursor:pointer}
+  button:disabled{opacity:.5; cursor:default}
+  .msg{margin-top:18px; font-size:14px; line-height:1.5; min-height:1em}
+  .msg.err{color:var(--red)} .msg.ok{color:var(--green)}
+  a{color:var(--violet)}
+</style>
+</head>
+<body>
+<main>
+  <a class="mark" href="/">Vaani</a>
+  <h1>Choose a new <em>password</em></h1>
+  <p>At least 8 characters. Saving it signs you out on every other device.</p>
+  <form id="f">
+    <label><span>New password</span><input id="p1" type="password" autocomplete="new-password" minlength="8" required></label>
+    <label><span>Confirm password</span><input id="p2" type="password" autocomplete="new-password" minlength="8" required></label>
+    <button id="go" type="submit">Save password</button>
+  </form>
+  <div class="msg" id="msg" role="status"></div>
+</main>
+<script>
+(() => {
+  const token = new URLSearchParams(location.search).get('token');
+  const msg = document.getElementById('msg'), go = document.getElementById('go');
+  const say = (t, k) => { msg.textContent = t; msg.className = 'msg ' + (k || ''); };
+  if (!token) { say('This link is incomplete. Request a new one from the sign-in screen.', 'err'); go.disabled = true; return; }
+  // Keep the token out of the address bar (and so out of history and screenshots).
+  history.replaceState(null, '', location.pathname);
+
+  document.getElementById('f').onsubmit = async e => {
+    e.preventDefault();
+    const p1 = document.getElementById('p1').value, p2 = document.getElementById('p2').value;
+    if (p1 !== p2) return say('The two passwords do not match.', 'err');
+    go.disabled = true; say('');
+    try {
+      const r = await fetch('/api/auth/reset-password', {
+        method: 'POST', headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({token, password: p1}),
+      });
+      const d = await r.json().catch(() => ({}));
+      if (!r.ok) { say(d.detail || 'Could not reset the password.', 'err'); go.disabled = false; return; }
+      // The response set the session cookies; nothing to store in script.
+      say('Password saved. Taking you to your dashboard…', 'ok');
+      setTimeout(() => location.href = '/dashboard', 1100);
+    } catch (err) { say('Network error. Please try again.', 'err'); go.disabled = false; }
+  };
+})();
+</script>
+</body>
+</html>

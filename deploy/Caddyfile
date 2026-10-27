@@ -1,0 +1,40 @@
+# Caddy configuration for the Vaani edge.
+#
+# One file, two modes, chosen by the DOMAIN environment variable:
+#
+#   DOMAIN=vaani.example.com  -> automatic HTTPS with a Let's Encrypt
+#                                  certificate, HTTP redirected to HTTPS
+#   DOMAIN=:80                 -> plain HTTP, for a local stack test
+#
+# Caddy is the TLS terminator and the only service published to the internet.
+# The API itself stays on the compose network, so nothing can reach it except
+# through this proxy, and the client IP arrives as X-Forwarded-For - which is
+# what the rate limiter reads.
+
+{$DOMAIN} {
+    encode zstd gzip
+
+    # The API behind it, on the compose network. Not published directly.
+    reverse_proxy api:8000 {
+        # Twilio voice webhooks and the browser demo both stream.
+        flush_interval -1
+    }
+
+    header {
+        Strict-Transport-Security "max-age=31536000; includeSubDomains"
+        X-Content-Type-Options "nosniff"
+        Referrer-Policy "strict-origin-when-cross-origin"
+        X-Frame-Options "SAMEORIGIN"
+        -Server
+    }
+
+    # Voice uploads are audio, not video; 20MB is generous.
+    request_body {
+        max_size 20MB
+    }
+
+    log {
+        output stdout
+        format console
+    }
+}

@@ -24,6 +24,11 @@
     .controls { pointer-events:auto; display:flex; align-items:center; gap:10px; width:100%; background:rgba(15,12,26,.72); backdrop-filter:blur(18px); border:1px solid rgba(200,194,255,.16); border-radius:999px; padding:6px 6px 6px 20px; box-shadow:0 8px 40px rgba(70,55,140,.16); }
     .controls input { flex:1; background:transparent; border:0; outline:0; color:#f5f4ff; font-size:15px; letter-spacing:.01em; padding:10px 4px; font-family:inherit; }
     .controls input::placeholder { color:#6f6c85; }
+    /* First-visit prompts. Without them a stranger types "hello" and leaves;
+       these three are the ones the demo actually answers well. */
+    .suggestions { pointer-events:auto; display:flex; flex-wrap:wrap; justify-content:center; gap:8px; width:100%; margin:2px 0 10px; }
+    .suggestion { font-family:inherit; font-size:12px; letter-spacing:.01em; color:#cfc9f5; background:rgba(30,25,55,.66); border:1px solid rgba(200,194,255,.22); border-radius:999px; padding:7px 13px; cursor:pointer; transition:.2s ease; }
+    .suggestion:hover { color:#fff; border-color:rgba(200,194,255,.55); box-shadow:0 0 20px rgba(141,125,255,.2); }
     .btn { border:1px solid rgba(200,194,255,.24); color:#f8f7ff; background:rgba(30,25,55,.75); border-radius:999px; padding:10px 18px; cursor:pointer; font-weight:600; letter-spacing:.02em; transition:.2s ease; font-family:inherit; font-size:13px; }
     .btn:hover { border-color:rgba(200,194,255,.6); box-shadow:0 0 26px rgba(141,125,255,.28); }
     .btn.primary { background:linear-gradient(135deg, #7b6bd6, #b9a8ff); color:#0b0819; border-color:transparent; }
@@ -51,14 +56,26 @@
     .status-hint { min-height:14px; font-size:11px; color:#6f6c85; letter-spacing:.12em; text-transform:uppercase; text-align:center; pointer-events:none; opacity:0; transition:opacity .3s ease; }
     .status-hint.show { opacity:1; }
 
-    .transcript-box { display:none; max-height:120px; width:100%; overflow-y:auto; background:rgba(15,12,26,.85); border:1px solid rgba(200,194,255,.2); border-radius:12px; padding:10px 14px; font-size:13px; line-height:1.4; color:#e0dcfc; box-shadow:0 4px 20px rgba(0,0,0,.4); backdrop-filter:blur(10px); pointer-events:auto; margin-bottom: 6px; }
+    /* Holds the whole conversation now, not one exchange, so it needs room. */
+    /* No scroll-behavior:smooth here - the box is re-rendered on every turn,
+       and an animated scroll gets cancelled by the next render, so the newest
+       message never actually comes into view. */
+    .transcript-box { display:none; max-height:min(230px, 34vh); width:100%; overflow-y:auto; background:rgba(15,12,26,.85); border:1px solid rgba(200,194,255,.2); border-radius:12px; padding:10px 14px; font-size:13px; line-height:1.4; color:#e0dcfc; box-shadow:0 4px 20px rgba(0,0,0,.4); backdrop-filter:blur(10px); pointer-events:auto; margin-bottom: 6px; }
     .transcript-box.show { display:block; }
     .transcript-box .user-msg { color:#b9a8ff; font-weight:500; margin-bottom:4px; }
-    .transcript-box .agent-msg { color:#ffffff; margin-bottom:2px; }
+    .transcript-box .agent-msg { color:#ffffff; margin-bottom:12px; }
+    .transcript-box .agent-msg:last-child { margin-bottom:2px; }
+    /* Only rendered when a row was actually written to `appointments`, so it
+       doubles as proof the demo is not scripted. */
+    .transcript-box .booking-chip { display:inline-flex; gap:6px; align-items:center; margin:-8px 0 12px; padding:4px 9px; border-radius:999px; font-size:11px; letter-spacing:.04em; color:#4ade80; background:rgba(74,222,128,.12); border:1px solid rgba(74,222,128,.35); }
     /* gap on .status-row handles the spacing; margin-left here double-counted
        it and pushed the badge over the status label. */
     .backend-badge { font-size:10px; padding:2px 6px; border-radius:4px; background:rgba(0,200,100,.15); color:#4ade80; border:1px solid rgba(74,222,128,.3); text-transform:none; letter-spacing:normal; white-space:nowrap; }
     .backend-badge.offline { background:rgba(239,68,68,.15); color:#f87171; border-color:rgba(248,113,113,.3); }
+    /* The hackathon rule is "open models". Saying which model answered, in the
+       demo itself, is more convincing than a line in the README. */
+    .backend-badge.engine { background:rgba(120,110,220,.15); color:#b9a8ff; border-color:rgba(185,168,255,.35); cursor:help; }
+    .backend-badge.engine.closed { background:rgba(239,180,68,.12); color:#f0c46b; border-color:rgba(240,196,107,.3); }
 
     @keyframes pulse { 50% { transform: scale(1.65); opacity: .5; } }
   </style>
@@ -67,6 +84,7 @@
   <main id="stage">
     <div class="hud">
       <a href="/" class="brand" style="pointer-events:auto; text-decoration:none">&larr; Vaani &middot; AI Receptionist</a>
+      <a href="/dashboard" id="dashLink" class="brand" style="pointer-events:auto; text-decoration:none; left:auto; right:78px; display:none">Dashboard &rarr;</a>
 
       <button id="settingsBtn" class="settings-btn" title="Settings" aria-label="Settings">
         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09a1.65 1.65 0 0 0-1-1.51 1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09a1.65 1.65 0 0 0 1.51-1 1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33h0a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51h0a1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82v0a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
@@ -75,7 +93,12 @@
       <div class="panel">
         <div id="statusHint" class="status-hint"></div>
         <div id="transcriptBox" class="transcript-box"></div>
-        <div class="status-row"><span id="statusDot" class="dot"></span><span id="statusText">Idle</span><span id="backendBadge" class="backend-badge">Checking backend...</span></div>
+        <div class="status-row"><span id="statusDot" class="dot"></span><span id="statusText">Idle</span><span id="backendBadge" class="backend-badge">Checking backend...</span><span id="engineBadge" class="backend-badge engine" title="Which model answers, and whether its weights are open">Model: checking...</span></div>
+        <div class="suggestions" id="suggestions">
+          <button class="suggestion" type="button" data-say="Book a teeth cleaning tomorrow at 11 am">Book a cleaning tomorrow at 11</button>
+          <button class="suggestion" type="button" data-say="What are your opening hours?">What are your hours?</button>
+          <button class="suggestion" type="button" data-say="Do you have parking?">Is there parking?</button>
+        </div>
         <div class="controls">
           <input id="textInput" type="text" placeholder="Talk or type a message for AI Receptionist…" autocomplete="off" />
           <button id="speakBtn" class="btn primary" type="button">Send</button>
@@ -433,6 +456,20 @@
     const sessionId = 'web_' + (crypto.randomUUID?.().slice(0, 12)
       ?? Math.random().toString(36).slice(2, 14));
 
+    // The session lives in an httpOnly cookie the browser sends by itself;
+    // page script never sees it. X-Requested-With marks our own requests
+    // (the server's CSRF check for cookie-authenticated writes).
+    localStorage.removeItem('vaani_token'); localStorage.removeItem('vaani_refresh');  // pre-cookie sessions
+    function authHeaders(base = {}) {
+      return { ...base, 'X-Requested-With': 'fetch' };
+    }
+
+    // Only surface the dashboard once there is a session to view it with.
+    if (document.cookie.includes('vaani_signed_in=1')) fetch(`${BACKEND_URL}/api/auth/me`, { credentials: 'same-origin' }).then(r => {
+      const dl = document.getElementById('dashLink');
+      if (r.ok && dl) dl.style.display = '';
+    }).catch(() => {});
+
     async function checkBackendHealth() {
       const badge = document.getElementById('backendBadge');
       try {
@@ -456,6 +493,30 @@
     }
     checkBackendHealth();
     setInterval(checkBackendHealth, 8000);
+
+    /** Show the model that answers, and whether its weights are open. */
+    async function showEngine() {
+      const badge = document.getElementById('engineBadge');
+      if (!badge) return;
+      try {
+        const res = await fetch(`${BACKEND_URL}/api/llm/status`);
+        const st = await res.json();
+        if (!st.available || !st.provider) {
+          badge.textContent = 'Model: built-in rules';
+          badge.classList.add('closed');
+          badge.title = st.detail || 'No model configured - the deterministic booking flow answers.';
+          return;
+        }
+        const short = String(st.model || st.provider).split('/').pop();
+        badge.textContent = st.open_weights ? `Model: ${short} - open weights` : `Model: ${short} - closed weights`;
+        badge.classList.toggle('closed', !st.open_weights);
+        badge.title = `${st.provider} / ${st.model}` +
+          (st.fallbacks && st.fallbacks.length ? ` | failover: ${st.fallbacks.join(', ')}` : '');
+      } catch (e) {
+        badge.textContent = 'Model: unknown';
+      }
+    }
+    showEngine();
 
     let micAnalyser = null, micStream = null, micData = null;
     let listening = false;
@@ -800,16 +861,44 @@
       if (State.mode === 'speaking') setMode(listening ? 'listening' : 'idle');
     }
 
-    function showTranscript(userMsg, agentMsg) {
+    // Full running transcript. This used to replace the box with only the
+    // latest exchange, so earlier turns disappeared as soon as you replied -
+    // the box was styled to scroll but never had more than one pair in it.
+    const transcript = [];
+
+    function renderTranscript() {
       const box = document.getElementById('transcriptBox');
       if (!box) return;
       box.classList.add('show');
-      let html = '';
-      if (userMsg) html += `<div class="user-msg">You: ${escapeHtml(userMsg)}</div>`;
-      if (agentMsg) html += `<div class="agent-msg">AI: ${escapeHtml(agentMsg)}</div>`;
-      else html += `<div class="agent-msg" style="opacity:0.6">AI is thinking...</div>`;
-      box.innerHTML = html;
+      box.innerHTML = transcript.map(t => {
+        const chip = (t.booked && t.booked.length)
+          ? t.booked.map(b => `<div class="booking-chip">✓ Booked · ${escapeHtml(b.service)} · ref ${escapeHtml(b.reference)}</div>`).join('')
+          : '';
+        return t.role === 'user'
+          ? `<div class="user-msg">You: ${escapeHtml(t.text)}</div>`
+          : `<div class="agent-msg"${t.pending ? ' style="opacity:0.6"' : ''}>AI: ${escapeHtml(t.text)}</div>${chip}`;
+      }).join('');
       box.scrollTop = box.scrollHeight;
+    }
+
+    /** Append the caller's line and a placeholder for the reply. */
+    function pushUserTurn(userMsg) {
+      const suggestions = document.getElementById('suggestions');
+      if (suggestions) suggestions.style.display = 'none';
+      transcript.push({ role: 'user', text: userMsg });
+      transcript.push({ role: 'agent', text: 'thinking…', pending: true });
+      renderTranscript();
+    }
+
+    /** Fill in (or correct) the most recent agent line. */
+    function resolveAgentTurn(agentMsg, booked) {
+      for (let i = transcript.length - 1; i >= 0; i--) {
+        if (transcript[i].role === 'agent') {
+          transcript[i] = { role: 'agent', text: agentMsg, booked: booked || [] };
+          break;
+        }
+      }
+      renderTranscript();
     }
 
     function escapeHtml(str) {
@@ -824,14 +913,17 @@
       const message = text.trim();
       textInput.value = '';
 
-      showTranscript(message, null);
+      pushUserTurn(message);
       setMode('thinking');
       flashHint('AI Receptionist is thinking…');
 
       try {
         const res = await fetch(`${BACKEND_URL}/api/chat`, {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          // Send the session token when signed in, so the call is filed under
+          // the user's own business and shows up on their dashboard. Without
+          // this every conversation lands in the shared demo business.
+          headers: authHeaders({ 'Content-Type': 'application/json' }),
           body: JSON.stringify({
             message: message,
             conversation_history: conversationHistory,
@@ -850,8 +942,9 @@
 
         conversationHistory.push({ role: 'user', content: message });
         conversationHistory.push({ role: 'assistant', content: responseText });
+        if (conversationHistory.length > 40) conversationHistory = conversationHistory.slice(-40);
 
-        showTranscript(message, responseText);
+        resolveAgentTurn(responseText, data.booked);
         flashHint('AI Receptionist responding…');
 
         speak(responseText);
@@ -859,21 +952,25 @@
         console.error('Backend API error:', err);
         setMode('error');
         flashHint(`Backend offline (${API_LABEL})`);
-        showTranscript(message, `Unable to connect to receptionist backend. Make sure the backend server is running at ${API_LABEL}.`);
+        resolveAgentTurn(`Unable to connect to the backend. Make sure the server is running at ${API_LABEL}.`);
         speak("I'm having trouble connecting to the receptionist backend server.");
       }
     }
 
     speakBtn.addEventListener('click', () => {
+      const text = textInput.value.trim();
+      // Typing while she is talking must interrupt and send, not discard.
+      // Previously the speaking branch returned first, so anything typed
+      // during a reply (4-8s of audio) was silently thrown away.
+      if (text) return sendToBackend(text);
       if (State.mode === 'speaking') return stopSpeaking();
-      if (textInput.value.trim()) {
-        sendToBackend(textInput.value);
-      } else {
-        flashHint('Please type or speak a message first');
-      }
+      flashHint('Please type or speak a message first');
     });
     textInput.addEventListener('keydown', (e) => {
       if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); speakBtn.click(); }
+    });
+    document.querySelectorAll('.suggestion').forEach((chip) => {
+      chip.addEventListener('click', () => sendToBackend(chip.dataset.say || chip.textContent));
     });
 
     // ================================================================

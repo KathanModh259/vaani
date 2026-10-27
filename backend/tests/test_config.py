@@ -1,4 +1,3 @@
-import pytest
 import os
 from scripts.config import Settings
 
@@ -18,6 +17,13 @@ class TestSettings:
             os.environ.pop("HOST", None)
             os.environ.pop("PORT", None)
             os.environ.pop("DATABASE_URL", None)
+
+    def test_blank_values_fall_back_to_defaults(self, monkeypatch):
+        monkeypatch.setenv("DOCS_ENABLED", "")
+        monkeypatch.setenv("DB_POOL_SIZE", "")
+        monkeypatch.setenv("RATE_LIMIT_ENABLED", "  ")
+        s = Settings()
+        assert s.DB_POOL_SIZE == 10 and s.RATE_LIMIT_ENABLED is True
 
     def test_debug_from_env(self):
         os.environ["DEBUG"] = "true"

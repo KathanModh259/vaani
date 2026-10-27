@@ -178,6 +178,8 @@
     <a href="#pricing" class="hide-sm">Pricing</a>
     <a href="#trust" class="hide-sm">Security</a>
     <a href="/app" class="hide-sm">Live demo</a>
+    <a href="https://github.com/KathanModh259/vaani" class="hide-sm" target="_blank" rel="noopener">GitHub</a>
+    <a href="/dashboard" id="navDash" style="display:none">Dashboard</a>
     <a href="#" id="navAuth">Sign in</a>
     <a href="#pricing" class="btn btn-fill">Start free trial</a>
   </div>
@@ -287,8 +289,8 @@
         <h2>Your calls. Your data.<br><em>Your control.</em></h2>
       </div>
       <div class="grid3 rv">
-        <div class="cell"><div class="n">Privacy</div><h3>Encrypted end to end</h3>
-          <p>Call audio and transcripts are encrypted in transit and at rest. Recordings are retained only as long as you configure.</p></div>
+        <div class="cell"><div class="n">Privacy</div><h3>Encrypted in transit and at rest</h3>
+          <p>Traffic is served over TLS and call transcripts are encrypted with AES before they reach the database. Retention is yours to set.</p></div>
         <div class="cell"><div class="n">Control</div><h3>You set the boundaries</h3>
           <p>Define exactly what Vaani may promise, quote and book. Anything outside those rules goes to a human — never improvised.</p></div>
         <div class="cell"><div class="n">Transparency</div><h3>Every call, on the record</h3>
@@ -334,7 +336,7 @@
   <div class="foot">
     <div><span class="mark">Vaani</span> &nbsp;·&nbsp; AI Receptionist</div>
     <div style="display:flex; gap:26px; flex-wrap:wrap">
-      <a href="#pricing">Pricing</a><a href="/app">Live demo</a><a href="#trust">Security</a><a href="/docs">API</a>
+      <a href="#pricing">Pricing</a><a href="/app">Live demo</a><a href="#trust">Security</a><a href="https://github.com/KathanModh259/vaani" target="_blank" rel="noopener">GitHub</a><a href="/privacy">Privacy</a><a href="/terms">Terms</a>
     </div>
     <div>© <span id="yr"></span> Vaani</div>
   </div>
@@ -351,7 +353,8 @@
       <div class="fld su"><label for="fName">Full name</label><input id="fName" autocomplete="name" /></div>
       <div class="fld su"><label for="fBiz">Business name</label><input id="fBiz" autocomplete="organization" /></div>
       <div class="fld"><label for="fMail">Work email</label><input id="fMail" type="email" autocomplete="email" required /></div>
-      <div class="fld"><label for="fPass">Password</label><input id="fPass" type="password" required /></div>
+      <div class="fld" id="passFld"><label for="fPass">Password</label><input id="fPass" type="password" required /></div>
+      <div class="si" style="display:none; margin:-4px 0 14px; font-size:13px"><a href="#" id="forgotLink" style="color:var(--violet)">Forgot password?</a></div>
       <button type="submit" class="btn btn-fill" id="authGo">Create account</button>
     </form>
   </div>
@@ -447,7 +450,7 @@
     { who:'Caller', text:'Hi, do you have anything open this Saturday morning?' },
     { who:'Vaani', ai:true, text:'We do — 10:15 or 11:30 on Saturday. Which suits you better?' },
     { who:'Caller', text:'11:30 works. And how much is the cleaning?' },
-    { who:'Vaani', ai:true, text:'₹1,200 for a standard cleaning. I have booked you for Saturday 11:30 and sent a confirmation by SMS.', chip:'Appointment booked' },
+    { who:'Vaani', ai:true, text:'₹1,200 for a standard cleaning. I have booked you for Saturday 11:30 — the slot is in the calendar.', chip:'Appointment booked' },
   ];
   const turnsEl = document.getElementById('demoTurns');
   let played = false;
@@ -499,20 +502,38 @@
     sample(e.currentTarget, 'नमस्ते, आपका स्वागत है। मैं आपकी क्या सहायता कर सकती हूँ?', 'hi');
 
   // ---------- session ----------
-  const tokenKey = 'vaani_token';
-  let token = localStorage.getItem(tokenKey);
+  // Sessions are httpOnly cookies set by the server; script never holds a
+  // token. Drop tokens left by the pre-cookie version of this page.
+  localStorage.removeItem('vaani_token'); localStorage.removeItem('vaani_refresh');
+  const XRW = { 'X-Requested-With': 'fetch' };
   let user = null;
   const navAuth = document.getElementById('navAuth');
-  const paintAuth = () => navAuth.textContent = user ? (user.full_name?.split(' ')[0] || 'Account') : 'Sign in';
+  const navDash = document.getElementById('navDash');
+  const paintAuth = () => {
+    navAuth.textContent = user ? (user.full_name?.split(' ')[0] || 'Account') : 'Sign in';
+    // The dashboard is only reachable with a session, so only advertise it then.
+    if (navDash) navDash.style.display = user ? '' : 'none';
+  };
 
   (async () => {
-    if (!token) return;
+    if (!document.cookie.includes('vaani_signed_in=1')) return;   // never signed in here
     try {
-      const r = await fetch(`${API}/api/auth/me`, { headers: { Authorization: `Bearer ${token}` } });
+      let r = await fetch(`${API}/api/auth/me`, { credentials: 'same-origin' });
+      if (r.status === 401) {
+        // Access cookie expired; the refresh cookie buys a new pair.
+        const rr = await fetch(`${API}/api/auth/refresh`, { method: 'POST', credentials: 'same-origin', headers: XRW });
+        if (rr.ok) { user = (await rr.json()).user; paintAuth(); return; }
+      }
       if (r.ok) { user = await r.json(); paintAuth(); }
-      else { token = null; localStorage.removeItem(tokenKey); }
     } catch (e) {}
   })();
+
+  // The dashboard bounces signed-out visitors here with ?signin=1; without
+  // handling it they land on the marketing page with no idea what happened.
+  if (new URLSearchParams(location.search).has('signin')) {
+    addEventListener('DOMContentLoaded', () => openModal('signin'));
+    if (document.readyState !== 'loading') setTimeout(() => openModal('signin'), 0);
+  }
 
   // ---------- pricing ----------
   const money = (paise, cur) =>
@@ -551,10 +572,15 @@
     mode = m;
     tabUp.classList.toggle('on', m === 'signup'); tabIn.classList.toggle('on', m === 'signin');
     document.querySelectorAll('.fld.su').forEach(el => el.style.display = m === 'signup' ? 'flex' : 'none');
-    goBtn.textContent = m === 'signup' ? 'Create account' : 'Sign in';
-    document.getElementById('authTitle').textContent = m === 'signup' ? 'Start your free trial' : 'Welcome back';
-    document.getElementById('authSub').textContent = m === 'signup' ? '14 days on us. No card required.' : 'Sign in to your Vaani account.';
-    document.getElementById('fPass').autocomplete = m === 'signup' ? 'new-password' : 'current-password';
+    document.querySelectorAll('.si').forEach(el => el.style.display = m === 'signin' ? 'block' : 'none');
+    document.getElementById('passFld').style.display = m === 'forgot' ? 'none' : 'flex';
+    const pass = document.getElementById('fPass');
+    pass.required = m !== 'forgot';
+    pass.autocomplete = m === 'signup' ? 'new-password' : 'current-password';
+    goBtn.textContent = {signup: 'Create account', signin: 'Sign in', forgot: 'Email me a reset link'}[m];
+    document.getElementById('authTitle').textContent = {signup: 'Start your free trial', signin: 'Welcome back', forgot: 'Reset your password'}[m];
+    document.getElementById('authSub').textContent = {signup: '14 days on us. No card required.', signin: 'Sign in to your Vaani account.',
+      forgot: "Enter your account email and we'll send you a link."}[m];
     say('');
   }
   const openModal = m => { setMode(m); modal.classList.add('open'); setTimeout(() => document.getElementById(m === 'signup' ? 'fName' : 'fMail').focus(), 60); };
@@ -562,10 +588,11 @@
 
   tabUp.onclick = () => setMode('signup');
   tabIn.onclick = () => setMode('signin');
+  document.getElementById('forgotLink').onclick = e => { e.preventDefault(); setMode('forgot'); };
   document.getElementById('authClose').onclick = closeModal;
   modal.onclick = e => { if (e.target === modal) closeModal(); };
   addEventListener('keydown', e => { if (e.key === 'Escape') closeModal(); });
-  navAuth.onclick = e => { e.preventDefault(); user ? location.href = '/app' : openModal('signin'); };
+  navAuth.onclick = e => { e.preventDefault(); user ? location.href = '/dashboard' : openModal('signin'); };
 
   function choosePlan(planId, custom) {
     if (custom) { location.href = 'mailto:sales@vaani.ai?subject=Enterprise%20enquiry'; return; }
@@ -576,12 +603,12 @@
   async function subscribe(planId) {
     try {
       const r = await fetch(`${API}/api/subscriptions?plan_id=${encodeURIComponent(planId)}`, {
-        method: 'POST', headers: { Authorization: `Bearer ${token}` },
+        method: 'POST', credentials: 'same-origin', headers: XRW,
       });
-      if (r.status === 409) { say('You already have an active subscription. Redirecting…', 'ok'); setTimeout(() => location.href = '/app', 1200); return; }
+      if (r.status === 409) { say('You already have an active subscription. Redirecting…', 'ok'); setTimeout(() => location.href = '/dashboard', 1200); return; }
       if (!r.ok) { const d = await r.json().catch(() => ({})); say(d.detail || 'Could not start the trial.', 'err'); return; }
-      say('Trial started. Taking you to Vaani…', 'ok');
-      setTimeout(() => location.href = '/app', 1200);
+      say('Trial started. Let’s set up your receptionist…', 'ok');
+      setTimeout(() => location.href = '/dashboard#settings', 1200);
     } catch (e) { say('Network error — is the backend running?', 'err'); }
   }
 
@@ -589,6 +616,17 @@
     e.preventDefault();
     goBtn.disabled = true; say('');
     const email = document.getElementById('fMail').value.trim();
+    if (mode === 'forgot') {
+      try {
+        const r = await fetch(`${API}/api/auth/forgot-password`, {
+          method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ email }),
+        });
+        const d = await r.json().catch(() => ({}));
+        say(r.ok ? 'If that email has an account, a reset link is on its way. Check your inbox.' : (d.detail || 'Could not send the link.'), r.ok ? 'ok' : 'err');
+      } catch (err) { say('Network error — is the backend running?', 'err'); }
+      goBtn.disabled = false;
+      return;
+    }
     const password = document.getElementById('fPass').value;
     const payload = mode === 'signup'
       ? { email, password, full_name: document.getElementById('fName').value.trim() || email.split('@')[0], business_name: document.getElementById('fBiz').value.trim() || undefined }
@@ -599,10 +637,11 @@
       });
       const data = await r.json().catch(() => ({}));
       if (!r.ok) { say(typeof data.detail === 'string' ? data.detail : 'Could not complete that.', 'err'); goBtn.disabled = false; return; }
-      token = data.access_token; user = data.user;
-      localStorage.setItem(tokenKey, token); paintAuth();
+      user = data.user;   // the response also set the session cookies
+      paintAuth();
       if (pendingPlan) await subscribe(pendingPlan);
-      else { say('Signed in. Taking you to Vaani…', 'ok'); setTimeout(() => location.href = '/app', 1000); }
+      else if (mode === 'signup') { say('Account created. Let’s set up your receptionist…', 'ok'); setTimeout(() => location.href = '/dashboard#settings', 1000); }
+      else { say('Signed in. Taking you to your dashboard…', 'ok'); setTimeout(() => location.href = '/dashboard', 1000); }
     } catch (err) { say('Network error — is the backend running?', 'err'); }
     goBtn.disabled = false;
   };

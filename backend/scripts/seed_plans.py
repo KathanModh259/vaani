@@ -20,7 +20,6 @@ from sqlalchemy import select
 from db import DatabaseManager, PlanSQL
 from scripts.config import settings
 
-logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
 logger = logging.getLogger("seed_plans")
 
 PLANS = [
@@ -75,18 +74,46 @@ PLANS = [
         "max_businesses": 0,       # 0 => unlimited
         "max_phone_numbers": 0,
         "max_minutes_monthly": 0,
+        # Only list what you can actually deliver today. "99.9% uptime SLA",
+        # "SSO" and "data residency" were advertised here while none of them
+        # existed - promising them to an enterprise buyer is a contractual
+        # commitment, not marketing copy. Anything genuinely negotiated per
+        # deal is labelled as such rather than implied to be built.
         "features": [
             "Unlimited numbers and locations",
             "Volume minute pricing",
             "Everything in Growth",
-            "Dedicated telephony trunk",
-            "Custom AI training on your playbooks",
-            "SSO, audit logs, data residency",
-            "99.9% uptime SLA",
+            "Custom voice and greeting per location",
+            "Priority onboarding and migration",
             "Dedicated success manager",
+            "Security review and DPA on request",
+            "Custom SLA and integrations scoped per contract",
         ],
     },
 ]
+
+
+async def upsert_plans(session, only_if_empty: bool = False) -> tuple:
+    """Create or update PLANS. With only_if_empty, do nothing if any plan
+    exists - the app calls it that way at boot so a fresh deploy has pricing,
+    while prices an operator edited in the database are never overwritten."""
+    if only_if_empty and (await session.execute(select(PlanSQL.id).limit(1))).first():
+        return (0, 0)
+    created = updated = 0
+    for spec in PLANS:
+        existing = (
+            await session.execute(select(PlanSQL).where(PlanSQL.id == spec["id"]))
+        ).scalar_one_or_none()
+        if existing:
+            for key, value in spec.items():
+                setattr(existing, key, value)
+            existing.is_active = True
+            updated += 1
+        else:
+            session.add(PlanSQL(is_active=True, **spec))
+            created += 1
+    await session.commit()
+    return (created, updated)
 
 
 async def seed():
@@ -96,21 +123,7 @@ async def seed():
 
     created = updated = 0
     try:
-        for spec in PLANS:
-            existing = (
-                await session.execute(select(PlanSQL).where(PlanSQL.id == spec["id"]))
-            ).scalar_one_or_none()
-
-            if existing:
-                for key, value in spec.items():
-                    setattr(existing, key, value)
-                existing.is_active = True
-                updated += 1
-            else:
-                session.add(PlanSQL(is_active=True, **spec))
-                created += 1
-
-        await session.commit()
+        created, updated = await upsert_plans(session)
     finally:
         await session.close()
         await db.close()
@@ -119,6 +132,7 @@ async def seed():
 
 
 if __name__ == "__main__":
+    logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
     try:
         asyncio.run(seed())
     except Exception as e:

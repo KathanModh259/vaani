@@ -1,10 +1,12 @@
 name: CI
 
+# The repository's default branch is master. This used to list only main,
+# so CI never ran on a single push.
 on:
   push:
-    branches: [main, develop]
+    branches: [master, main]
   pull_request:
-    branches: [main]
+    branches: [master, main]
 
 jobs:
   lint:
@@ -25,8 +27,8 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install ruff mypy
-          pip install -r requirements.txt
+          pip install -r requirements-dev.txt
+          pip install mypy
 
       - name: Lint with ruff
         run: ruff check .
@@ -52,19 +54,56 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install pytest pytest-asyncio httpx
-          pip install -r requirements.txt
+          pip install -r requirements-dev.txt
 
+      # tests/conftest.py pins every secret and gives each test its own
+      # migrated SQLite database, so no env is needed here.
       - name: Run tests
         run: pytest -v
+
+  # The same suite on Postgres - production's database. Timezone columns,
+  # row locks (the double-booking race test) and enum types only behave
+  # for real here.
+  test-postgres:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend
+    services:
+      postgres:
+        image: postgres:16-alpine
         env:
-          DATABASE_URL: sqlite+aiosqlite:///test.db
-          JWT_SECRET_KEY: test-secret-key
+          POSTGRES_USER: vaani
+          POSTGRES_PASSWORD: vaani
+          POSTGRES_DB: vaani_test
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U vaani" --health-interval 5s
+          --health-timeout 5s --health-retries 10
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements-dev.txt
+
+      - name: Run tests on Postgres
+        run: pytest -v
+        env:
+          TEST_DATABASE_URL: postgresql+asyncpg://vaani:vaani@localhost:5432/vaani_test
 
   docker:
     runs-on: ubuntu-latest
-    needs: [lint, test]
-    if: github.ref == 'refs/heads/main'
+    needs: [lint, test, test-postgres]
+    if: github.ref == 'refs/heads/master' || github.ref == 'refs/heads/main'
 
     steps:
       - uses: actions/checkout@v4
@@ -77,6 +116,95 @@ jobs:
         with:
           context: .
           push: false
+          load: true
           tags: vaani-api:latest
           cache-from: type=gha
           cache-to: type=gha,mode=max
+
+      # Building is not enough. An image once built, pushed and then died on
+      # `import sqlalchemy` because the wheelhouse was built with --no-deps,
+      # and a second one died because alembic was never in requirements.txt.
+      # Only running it catches either.
+      - name: Run the container and prove it serves
+        run: |
+          docker run -d --name vaani-ci -p 8000:8000 \
+            -e ENVIRONMENT=development \
+            -e DATABASE_URL=sqlite+aiosqlite:////tmp/ci.db \
+            vaani-api:latest
+
+          for i in $(seq 1 30); do
+            if curl -fsS http://localhost:8000/health/ready > /tmp/ready.json; then break; fi
+            sleep 2
+          done
+          cat /tmp/ready.json
+          grep -q '"status":"ready"' /tmp/ready.json
+
+          curl -fsS http://localhost:8000/ | grep -qi vaani
+          curl -fsS http://localhost:8000/app > /dev/null
+          curl -fsS http://localhost:8000/api/llm/status
+
+          # A real booking through the running container, then the row.
+          curl -fsS -X POST http://localhost:8000/api/chat \
+            -H 'Content-Type: application/json' \
+            -d '{"message":"teeth cleaning tomorrow at 11 am, name CI Runner, 9812340000"}' \
+            > /tmp/book.json
+          cat /tmp/book.json
+          grep -q '"booked"' /tmp/book.json
+
+      - name: Container logs on failure
+        if: failure()
+        run: docker logs vaani-ci
+
+  # The compose file is a deployable artifact, so it is tested as one:
+  # interpolation, a real `up` behind Caddy, then preflight against it.
+  compose:
+    runs-on: ubuntu-latest
+    needs: [test]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Generate deployment secrets
+        run: |
+          cd backend
+          python -m scripts.init_env --write
+          cd ..
+          # Localhost and plain HTTP, so the test needs no certificate.
+          sed -i 's|^PUBLIC_BASE_URL=.*|PUBLIC_BASE_URL=http://localhost|' .env
+          sed -i 's|^DOMAIN=.*|DOMAIN=:80|' .env
+          sed -i 's|^CORS_ORIGINS=.*|CORS_ORIGINS=http://localhost|' .env
+          grep -E '^(PUBLIC_BASE_URL|DOMAIN|CORS_ORIGINS)=' .env
+
+      - name: Validate compose interpolation
+        run: docker compose config > /dev/null
+
+      - name: Bring the stack up
+        run: docker compose up -d --build
+
+      - name: Wait for health
+        run: |
+          for i in $(seq 1 60); do
+            if curl -fsS http://localhost/health/ready > /tmp/ready.json 2>/dev/null; then break; fi
+            sleep 5
+          done
+          cat /tmp/ready.json
+          grep -q '"database":"ok"' /tmp/ready.json
+          docker compose ps
+
+      - name: Preflight the running stack
+        run: |
+          cd backend
+          python -m scripts.preflight http://localhost
+
+      - name: Prove a row reached Postgres
+        run: |
+          docker compose exec -T db psql -U vaani -d vaani \
+            -tAc "select count(*) from appointments" | grep -qv '^0$'
+
+      - name: Logs on failure
+        if: failure()
+        run: docker compose logs
