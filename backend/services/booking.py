@@ -194,6 +194,34 @@ async def next_available(
     return found
 
 
+async def nearest_slots(
+    session,
+    profile: BusinessProfile,
+    service: ServiceInfo,
+    target: datetime,
+    now: Optional[datetime] = None,
+    limit: int = 3,
+    horizon_days: int = 14,
+) -> List[datetime]:
+    """Free start times closest to `target`, preferring the target's own day.
+
+    What a human receptionist does when a slot is gone: "half past ten, or
+    quarter to five?" - not "nine o'clock, nine thirty or ten".
+    """
+    now = now or profile.now()
+    found: List[datetime] = []
+    for i in range(horizon_days):
+        day = target.date() + timedelta(days=i)
+        slots = await free_slots(session, profile, service, day, now=now, limit=200)
+        if not slots:
+            continue
+        slots.sort(key=lambda s: (abs((s - target).total_seconds()), s < target))
+        found.extend(slots)
+        if len(found) >= limit:
+            break
+    return found[:limit]
+
+
 async def book(
     session,
     profile: BusinessProfile,
@@ -219,7 +247,10 @@ async def book(
     now = now or profile.now()
 
     async def alternatives():
-        return await next_available(session, profile, service, max(start.date(), now.date()), now=now)
+        # Nearest first, not earliest-on-the-day: a caller who asked for 4pm
+        # offered 9am reads as a robot reading a list. Later slots win ties,
+        # because moving an appointment forward is easier than backward.
+        return await nearest_slots(session, profile, service, start, now=now)
 
     if start < now + MIN_NOTICE:
         raise BookingError("too_soon", "That time is too soon for us to book.", await alternatives())

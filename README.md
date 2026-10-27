@@ -1,5 +1,8 @@
 # Vaani
 
+[![CI](https://github.com/KathanModh259/vaani/actions/workflows/ci.yml/badge.svg)](https://github.com/KathanModh259/vaani/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/license-MIT-8a7fe8.svg)](LICENSE)
+
 **An open-source phone receptionist that answers in Hindi, Gujarati and English — and actually books the appointment.**
 
 Built for [OpenFire](https://tryalan.ai) with Alan and open-weight models. No closed LLM required, no per-minute vendor lock-in, and every confirmation a caller hears exists as a row in a database.
@@ -12,6 +15,20 @@ python -m venv .venv && .venv/Scripts/pip install -r requirements-dev.txt   # Li
 ```
 
 That runs with **zero API keys**. The deterministic booking flow books real appointments on a real calendar. Add one open-model key to turn on multilingual conversation, and the rest of the product does not change.
+
+---
+
+## What it looks like
+
+A caller books from the browser — no model key configured, so the deterministic
+flow answers and writes the appointment. The reference in the chip is the
+committed row:
+
+![Vaani booking a real appointment in the browser](docs/screenshots/demo.png)
+
+The landing page, if you want the front door rather than the reception desk:
+
+![Vaani landing page](docs/screenshots/landing.png)
 
 ---
 
@@ -198,7 +215,7 @@ appointment through MCP, and the owner reads the transcript. Every line is an
 assertion; the exit code is non-zero if any step fails.
 
 [`docs/EVIDENCE.md`](docs/EVIDENCE.md) is the generated transcript of that run -
-27 checks, 0 failures, no model key configured. Regenerate it rather than
+30 checks, 0 failures, no model key configured. Regenerate it rather than
 trusting it:
 
 ```bash
@@ -225,7 +242,22 @@ Building alone is not enough. An image once died on `import sqlalchemy` because
 its wheelhouse was built `--no-deps`, and another died without `alembic` in
 `requirements.txt`; both were found by running the image, not by building it.
 
-`pytest` runs 232 tests (1 skipped on SQLite, 233 on Postgres) — both databases are in CI. The suite covers the concurrency race, prompt-injection refusals, encrypted transcripts, CSRF on the cookie session, Twilio signature checks, the MCP server and the zero-key booking dialogue.
+### Latency, on this machine
+
+`python -m scripts.bench` drives the real endpoints in-process against SQLite on
+a 16-core Windows box. It measures the parts Vaani controls, not the network:
+
+| Path | n | p50 | p95 | max |
+|---|---|---|---|---|
+| Chat turn (deterministic rules) | 200 | 15.6 ms | 18.2 ms | 120.7 ms |
+| Booking write, end to end | 20 | 22.6 ms | 27.8 ms | 31.8 ms |
+| Availability read | 50 | 0.7 ms | 0.9 ms | 1.6 ms |
+
+Speech recognition, the model provider and speech synthesis are excluded: those
+are network-bound and vary by provider, so quoting them here would flatter the
+numbers rather than describe the product.
+
+`pytest` runs 234 tests (1 skipped on SQLite, 235 on Postgres) — both databases are in CI. The suite covers the concurrency race, prompt-injection refusals, encrypted transcripts, CSRF on the cookie session, Twilio signature checks, the MCP server and the zero-key booking dialogue.
 
 ## Deploy
 

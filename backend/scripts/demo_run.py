@@ -311,8 +311,55 @@ async def _run(use_model: bool) -> Transcript:
                 t.check("an agent cannot move someone else's appointment",
                         clash.get("ok") is False)
 
+                # ------------------------------------ clear the day
+                t.step("7. An Alan agent clears a day (the 'clear-the-day' prompt)")
+                sick_day = _bookable_day(3)
+                next_day = _bookable_day(4)
+                made = []
+                for clock, name in (("09:00", "Anil"), ("09:30", "Sneha"), ("10:00", "Vikram")):
+                    made.append(await _tool(mcp, "vaani_book_appointment",
+                                            customer_name=f"{name} Clear",
+                                            customer_phone="9812300900",
+                                            service="check-up", date=sick_day, time=clock))
+                t.check("three appointments exist on the day that has to move",
+                        all(b.get("ok") for b in made), sick_day)
+
+                # The agent's real procedure: read the free slots once, then
+                # hand them out one at a time instead of guessing a time.
+                free = await _tool(mcp, "vaani_check_availability",
+                                   date=next_day, service="check-up")
+                offered = list(free.get("slots") or [])
+                moved, used = [], []
+                for appt in made:
+                    if not offered:
+                        break
+                    clock = offered.pop(0)
+                    result = await _tool(mcp, "vaani_reschedule_appointment",
+                                         appointment_id=appt["appointment_id"],
+                                         date=next_day, time=clock,
+                                         customer_phone="9812300900")
+                    if result.get("ok"):
+                        moved.append(clock)
+                        used.append(clock)
+                        t.quote("Agent", f'moved {appt["customer"]} to {clock} on {next_day}')
+                t.check("all three appointments moved to free slots, one at a time",
+                        len(moved) == 3, ", ".join(moved))
+
+                # The slots the agent used are gone for everyone else.
+                taken = await _tool(mcp, "vaani_book_appointment",
+                                    customer_name="Clash", customer_phone="9812300901",
+                                    service="check-up", date=next_day, time=used[0] if used else "11:00")
+                t.check("a second agent cannot take a slot the move already used",
+                        taken.get("ok") is False, (taken.get("message") or "")[:48])
+
+                digest_after = await _tool(mcp, "vaani_daily_digest", date=next_day)
+                on_new_day = digest_after.get("appointments", [])
+                t.check("the digest shows the moved appointments on the new day",
+                        digest_after.get("ok") is True and len(on_new_day) == 3,
+                        f"{len(on_new_day)} on {next_day}")
+
                 # ------------------------------------------ transcript
-                t.step("7. What the owner can read afterwards")
+                t.step("8. What the owner can read afterwards")
                 calls = await _tool(mcp, "vaani_list_calls", limit=5)
                 t.check("call logs exist with outcomes",
                         calls.get("ok") and len(calls.get("calls", [])) > 0,

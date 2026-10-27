@@ -15,7 +15,11 @@
     .settings-btn { position:absolute; top:22px; right:24px; pointer-events:auto; background:rgba(20,17,35,.6); border:1px solid rgba(200,194,255,.18); color:#c8c1e6; width:40px; height:40px; border-radius:999px; cursor:pointer; display:inline-flex; align-items:center; justify-content:center; transition:.2s ease; }
     .settings-btn:hover { border-color:rgba(200,194,255,.5); color:#fff; }
     .panel { position:absolute; left:50%; bottom:34px; transform:translateX(-50%); display:flex; flex-direction:column; align-items:center; gap:14px; pointer-events:none; width:min(680px, 92vw); }
-    .status-row { display:flex; align-items:center; justify-content:center; flex-wrap:wrap; gap:9px; color:#aaa9b4; font-size:12px; letter-spacing:.16em; text-transform:uppercase; }
+    /* The status row sits over the brightest part of the portrait, so it needs
+       its own surface to stay readable in a screenshot or a recorded demo. */
+    .status-row { display:flex; align-items:center; justify-content:center; flex-wrap:wrap; gap:9px; color:#c3c0d4; font-size:12px; letter-spacing:.16em; text-transform:uppercase;
+      padding:7px 14px; border-radius:999px; background:rgba(9,7,18,.62); border:1px solid rgba(200,194,255,.10);
+      backdrop-filter:blur(10px); -webkit-backdrop-filter:blur(10px); text-shadow:0 1px 2px rgba(0,0,0,.6); }
     .dot { width:7px; height:7px; border-radius:50%; background:#756dbc; box-shadow:0 0 14px #8178da; transition:.3s ease; }
     .dot.listening { background:#c6bfff; box-shadow:0 0 22px #b9afff; animation:pulse 1.1s ease-in-out infinite; }
     .dot.speaking { background:#a29cff; box-shadow:0 0 22px #b9afff; animation:pulse 0.7s ease-in-out infinite; }
@@ -76,6 +80,9 @@
        demo itself, is more convincing than a line in the README. */
     .backend-badge.engine { background:rgba(120,110,220,.15); color:#b9a8ff; border-color:rgba(185,168,255,.35); cursor:help; }
     .backend-badge.engine.closed { background:rgba(239,180,68,.12); color:#f0c46b; border-color:rgba(240,196,107,.3); }
+    /* No model key is a supported state, not a warning: the deterministic
+       booking engine answers every call without one. Keep it neutral. */
+    .backend-badge.nokey { background:rgba(140,136,165,.12); color:#a9a6bd; border-color:rgba(170,166,190,.28); }
 
     @keyframes pulse { 50% { transform: scale(1.65); opacity: .5; } }
   </style>
@@ -502,13 +509,15 @@
         const res = await fetch(`${BACKEND_URL}/api/llm/status`);
         const st = await res.json();
         if (!st.available || !st.provider) {
-          badge.textContent = 'Model: built-in rules';
-          badge.classList.add('closed');
-          badge.title = st.detail || 'No model configured - the deterministic booking flow answers.';
+          badge.textContent = 'Engine: deterministic (no key)';
+          badge.classList.add('nokey');
+          badge.classList.remove('closed');
+          badge.title = st.detail || 'No model configured - the deterministic booking flow answers every call.';
           return;
         }
         const short = String(st.model || st.provider).split('/').pop();
         badge.textContent = st.open_weights ? `Model: ${short} - open weights` : `Model: ${short} - closed weights`;
+        badge.classList.remove('nokey');
         badge.classList.toggle('closed', !st.open_weights);
         badge.title = `${st.provider} / ${st.model}` +
           (st.fallbacks && st.fallbacks.length ? ` | failover: ${st.fallbacks.join(', ')}` : '');

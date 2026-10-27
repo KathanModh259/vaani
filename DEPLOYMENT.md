@@ -51,7 +51,7 @@ throwaway SQLite files and never read keys from your `.env`.
 **Prove the whole thing works** — no server needed:
 
 ```bash
-.venv/Scripts/python -m scripts.demo_run        # 27 assertions, exit 0 = pass
+.venv/Scripts/python -m scripts.demo_run        # 30 assertions, exit 0 = pass
 ```
 
 ### Free speech engines (optional, recommended)

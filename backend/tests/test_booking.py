@@ -189,3 +189,35 @@ async def test_profile_rendering(clinic):
     assert clinic.find_service("haircut") is None
     ctx = clinic.prompt_context()
     assert "Teeth cleaning - 45 min - 1,200 rupees" in ctx
+
+
+async def test_alternatives_are_near_the_requested_time_not_the_earliest(session, clinic):
+    """A caller asking for 4pm should hear 3:30 or 4:30, not 9am."""
+    monday = MONDAY
+    checkup = svc(clinic, "checkup")
+    # Busy: the morning, plus 15:00 and 16:00. Free near 16:00: 15:30, 16:30.
+    for hh in (9, 10, 11, 12, 15, 16):
+        await booking.book(session, clinic, checkup, at(monday, hh),
+                           f"Filler {hh}", "+919800000000", now=NOW)
+
+    with pytest.raises(BookingError) as error:
+        await booking.book(session, clinic, checkup, at(monday, 16), "Late", "+919800000002", now=NOW)
+    assert error.value.code == "taken"
+
+    alternatives = error.value.alternatives
+    assert alternatives, "a refused slot must bring alternatives"
+    assert at(monday, 16) not in alternatives
+    # Closest first: half past three or half past four, never 9am.
+    assert alternatives[0] in (at(monday, 15, 30), at(monday, 16, 30))
+    assert all(abs((a - at(monday, 16)).total_seconds()) <= 2 * 3600 for a in alternatives)
+
+
+async def test_nearest_slots_spill_to_the_next_day_when_the_day_is_full(session, clinic):
+    monday = MONDAY
+    checkup = svc(clinic, "checkup")
+    slots = await booking.free_slots(session, clinic, checkup, monday, now=NOW, limit=200)
+    for slot in slots:
+        await booking.book(session, clinic, checkup, slot, "Filler", "+919800000003", now=NOW)
+
+    found = await booking.nearest_slots(session, clinic, checkup, at(monday, 16, 0), now=NOW)
+    assert found and all(s.date() > monday for s in found)
