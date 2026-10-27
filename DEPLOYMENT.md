@@ -95,6 +95,12 @@ deploy, which would erase every booking. The blueprint creates a real database,
 and `scripts/config.py` rewrites Render's `postgres://` URL to
 `postgresql+asyncpg://` so the dashboard value can be used unchanged.
 
+The public origin is not hard-coded anywhere. If the name `vaani` is already
+taken, Render assigns something like `vaani-x1y2.onrender.com`, and
+`scripts/config.py` reads that from the `RENDER_EXTERNAL_URL` Render injects and
+uses it for `PUBLIC_BASE_URL` and CORS. The preflight command below should use
+the URL Render shows, not the one in this document.
+
 **Verify the deploy from outside:**
 
 ```bash

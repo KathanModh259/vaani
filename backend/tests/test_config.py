@@ -32,3 +32,12 @@ class TestSettings:
             assert settings.DEBUG is True
         finally:
             os.environ.pop("DEBUG", None)
+
+    def test_public_origin_comes_from_the_platform_when_not_configured(self, monkeypatch):
+        """Render assigns the hostname, so the blueprint must not hard-code it."""
+        monkeypatch.delenv("PUBLIC_BASE_URL", raising=False)
+        monkeypatch.setenv("RENDER_EXTERNAL_URL", "https://vaani-x1y2.onrender.com/")
+        monkeypatch.setenv("CORS_ORIGINS", "")
+        s = Settings()
+        assert s.PUBLIC_BASE_URL == "https://vaani-x1y2.onrender.com"
+        assert s.CORS_ORIGINS == ["https://vaani-x1y2.onrender.com"]

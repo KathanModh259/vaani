@@ -38,10 +38,12 @@ services:
         fromDatabase:
           name: vaani-db
           property: connectionString
+      # Left blank on purpose. scripts/config.py appends the origin Render
+      # actually assigned (from RENDER_EXTERNAL_URL), which is the only one this
+      # deployment needs - a hard-coded hostname breaks when the service name
+      # "vaani" is already taken and Render picks a suffixed URL instead.
       - key: CORS_ORIGINS
-        value: https://vaani.onrender.com
-      - key: PUBLIC_BASE_URL
-        value: https://vaani.onrender.com
+        value: ""
       - key: OPENROUTER_API_KEY
         sync: false
       - key: LLM_PROVIDER

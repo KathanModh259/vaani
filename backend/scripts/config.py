@@ -1,4 +1,6 @@
 import os
+from typing import List
+
 from pydantic import BaseModel, Field
 from dotenv import load_dotenv
 
@@ -35,6 +37,21 @@ def _database_url() -> str:
     return raw
 
 
+def _cors_origins() -> List[str]:
+    """Configured origins, plus the public origin the platform assigned."""
+    origins = [
+        o.strip() for o in _env(
+            "CORS_ORIGINS",
+            "http://localhost:3000,http://localhost:8080,http://localhost:8000,"
+            "http://127.0.0.1:3000,http://127.0.0.1:8080,http://127.0.0.1:8000",
+        ).split(",") if o.strip()
+    ]
+    public = (_env("PUBLIC_BASE_URL") or _env("RENDER_EXTERNAL_URL")).rstrip("/")
+    if public and public not in origins:
+        origins.append(public)
+    return origins
+
+
 class Settings(BaseModel):
     # API Configuration
     HOST: str = Field(default_factory=lambda: _env("HOST", "127.0.0.1"))
@@ -56,7 +73,12 @@ class Settings(BaseModel):
     # Public origin Twilio reaches us on, e.g. https://vaani.example.com.
     # Twilio signs the exact URL it called; behind a proxy the app sees
     # http://127.0.0.1:8000 instead, so signatures cannot be checked without it.
-    PUBLIC_BASE_URL: str = Field(default_factory=lambda: _env("PUBLIC_BASE_URL").rstrip("/"))
+    # Render injects RENDER_EXTERNAL_URL, which is the authoritative hostname:
+    # if the service name in render.yaml is taken, the assigned URL differs
+    # from anything hard-coded in the blueprint.
+    PUBLIC_BASE_URL: str = Field(
+        default_factory=lambda: (_env("PUBLIC_BASE_URL") or _env("RENDER_EXTERNAL_URL")).rstrip("/")
+    )
 
     # Twilio Configuration
     TWILIO_ACCOUNT_SID: str = Field(default_factory=lambda: _env("TWILIO_ACCOUNT_SID"))
@@ -218,13 +240,7 @@ class Settings(BaseModel):
     # deploys and the standalone static server. 127.0.0.1 is a distinct origin
     # from localhost to the browser, so both spellings must be listed.
     FRONTEND_URL: str = Field(default_factory=lambda: _env("FRONTEND_URL", "http://localhost:3000"))
-    CORS_ORIGINS: list = Field(default_factory=lambda: [
-        o.strip() for o in _env(
-            "CORS_ORIGINS",
-            "http://localhost:3000,http://localhost:8080,http://localhost:8000,"
-            "http://127.0.0.1:3000,http://127.0.0.1:8080,http://127.0.0.1:8000",
-        ).split(",") if o.strip()
-    ])
+    CORS_ORIGINS: list = Field(default_factory=_cors_origins)
 
 
 try:

@@ -257,7 +257,7 @@ Speech recognition, the model provider and speech synthesis are excluded: those
 are network-bound and vary by provider, so quoting them here would flatter the
 numbers rather than describe the product.
 
-`pytest` runs 234 tests (1 skipped on SQLite, 235 on Postgres) — both databases are in CI. The suite covers the concurrency race, prompt-injection refusals, encrypted transcripts, CSRF on the cookie session, Twilio signature checks, the MCP server and the zero-key booking dialogue.
+`pytest` runs 235 tests (1 skipped on SQLite, 236 on Postgres) — both databases are in CI. The suite covers the concurrency race, prompt-injection refusals, encrypted transcripts, CSRF on the cookie session, Twilio signature checks, the MCP server and the zero-key booking dialogue.
 
 ## Deploy
 
