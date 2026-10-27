@@ -92,7 +92,7 @@ Follow [DEMO.md](DEMO.md). The two beats that matter:
 - [ ] `python mcp/vaani_mcp.py --check` prints `READY`
 - [ ] `python mcp/vaani_mcp.py --print` emits a snippet that actually launches the server
 - [ ] README quickstart works from a clean clone
-- [ ] Video under 3 minutes, audio audible, no cuts
+- [ ] Video under 3 minutes, no cuts — recorded: `docs/demo.mp4` (42s, silent, reads without audio)
 - [ ] Repo public, licence visible, no secrets in history
 
 ## Honest limits to state, not hide

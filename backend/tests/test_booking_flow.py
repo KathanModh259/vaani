@@ -85,8 +85,13 @@ def test_times_are_read_the_way_callers_say_them():
     assert booking_flow.parse_time("at 11") == (11, 0)
     assert booking_flow.parse_time("noon") == (12, 0)
     assert booking_flow.parse_time("10 am") == (10, 0)
+    # "around 4" is how people ask, and means the same as "at 4".
+    assert booking_flow.parse_time("around 4") == (16, 0)
+    assert booking_flow.parse_time("about 5") == (17, 0)
+    assert booking_flow.parse_time("do you have a cleaning tomorrow around 4?") == (16, 0)
     # A phone number must never be mistaken for an appointment time.
     assert booking_flow.parse_time("9988776655") is None
+    assert booking_flow.parse_time("11 9988776655") is None
 
 
 def test_names_and_numbers():

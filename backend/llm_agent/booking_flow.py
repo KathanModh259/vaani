@@ -197,7 +197,10 @@ def parse_time(text: str) -> Optional[tuple[int, int]]:
     m = re.search(r"\b(?:at|by|around|aaj|kal|tomorrow|today)?\s*(\d{1,2})\s*(?:o'?clock|baje)\b", t)
     if m:
         return _bare_hour(int(m.group(1)))
-    m = re.search(r"\bat\s+(\d{1,2})\b(?!\s*[:.]\s*\d)", t)
+    # A bare hour needs a cue word, otherwise the digits of a phone number
+    # ("11 9988776655") would be read as an appointment. "around 4" and
+    # "about 4" are how people actually ask, and mean the same as "at 4".
+    m = re.search(r"\b(?:at|around|about|round|by)\s+(\d{1,2})\b(?!\s*[:.]\s*\d)", t)
     if m:
         return _bare_hour(int(m.group(1)))
 

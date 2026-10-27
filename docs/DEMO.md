@@ -1,5 +1,10 @@
 # Demo script
 
+A recorded take already exists at [`demo.mp4`](demo.mp4): 42 seconds, title
+card, the live booking flow, outro card. It was captured from the running app
+with CDP screencast, so the timings are the app's own. Re-record with
+`record_demo.py` (kept outside the repo) or follow the shot list below.
+
 Ninety seconds, recorded once, no cuts. The point is not that it talks — it is
 that the booking is real. Show the database twice: before and after.
 

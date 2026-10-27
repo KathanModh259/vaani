@@ -30,6 +30,12 @@ The landing page, if you want the front door rather than the reception desk:
 
 ![Vaani landing page](docs/screenshots/landing.png)
 
+And the same flow as a 42-second recording, driven in a real browser and
+captured frame by frame — the caller asks for "around 4", the agent finds
+4:00 PM, and the appointment is written before the transcript finishes:
+
+[`docs/demo.mp4`](docs/demo.mp4)
+
 ---
 
 ## The problem
